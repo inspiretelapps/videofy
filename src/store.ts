@@ -14,12 +14,16 @@ import type {
 
 export type Stage = "welcome" | "importing" | "editor";
 
-export type Sensitivity = "calm" | "normal" | "jumpy";
+export type Sensitivity = "strict" | "balanced" | "sensitive";
 const SENSITIVITY_VALUE: Record<Sensitivity, number> = {
-  calm: 0.25,
-  normal: 0.5,
-  jumpy: 0.8,
+  strict: 0.25,
+  balanced: 0.5,
+  sensitive: 0.8,
 };
+
+export type SortBy = "time" | "intensity";
+/** Minimum score a candidate needs to stay visible in the panel. */
+export type MinIntensity = 0 | 40 | 70;
 
 interface ExportState {
   running: boolean;
@@ -47,6 +51,9 @@ interface State {
   nextManualId: number;
   selection: Selection | null;
   pendingIn: number | null;
+  sortBy: SortBy;
+  minIntensity: MinIntensity;
+  checkedIds: number[];
 
   playhead: number;
   playing: boolean;
@@ -64,7 +71,11 @@ interface State {
   zoomToRange: (start: number, end: number) => void;
   select: (sel: Selection | null) => void;
   setCandidateStatus: (id: number, status: CandidateStatus) => void;
-  cutAllCandidates: () => void;
+  bulkSetStatus: (ids: number[], status: CandidateStatus) => void;
+  setSortBy: (s: SortBy) => void;
+  setMinIntensity: (m: MinIntensity) => void;
+  toggleChecked: (id: number) => void;
+  clearChecked: () => void;
   setPendingIn: (t: number | null) => void;
   commitOut: (t: number) => void;
   removeManualCut: (id: number) => void;
@@ -84,7 +95,7 @@ export const useStore = create<State>()((set, get) => ({
   analysis: null,
   analysisError: null,
   analyzing: false,
-  sensitivity: "normal",
+  sensitivity: "balanced",
   proxyPct: 0,
   analysisPct: 0,
   candidateStatus: {},
@@ -92,6 +103,9 @@ export const useStore = create<State>()((set, get) => ({
   nextManualId: 1,
   selection: null,
   pendingIn: null,
+  sortBy: "time",
+  minIntensity: 0,
+  checkedIds: [],
   playhead: 0,
   playing: false,
   seekReq: { t: 0, n: 0 },
@@ -144,6 +158,7 @@ export const useStore = create<State>()((set, get) => ({
         manualCuts: [],
         selection: null,
         pendingIn: null,
+        checkedIds: [],
         playhead: 0,
         playing: false,
         view: { t0: 0, t1: info.duration },
@@ -195,13 +210,24 @@ export const useStore = create<State>()((set, get) => ({
   setCandidateStatus: (id, status) =>
     set({ candidateStatus: { ...get().candidateStatus, [id]: status } }),
 
-  cutAllCandidates: () => {
+  bulkSetStatus: (ids, status) => {
     const statuses = { ...get().candidateStatus };
-    for (const c of get().analysis?.candidates ?? []) {
-      if (statuses[c.id] === "pending") statuses[c.id] = "cut";
-    }
-    set({ candidateStatus: statuses });
+    for (const id of ids) statuses[id] = status;
+    set({ candidateStatus: statuses, checkedIds: [] });
   },
+
+  setSortBy: (sortBy) => set({ sortBy }),
+  setMinIntensity: (minIntensity) => set({ minIntensity }),
+
+  toggleChecked: (id) => {
+    const checked = get().checkedIds;
+    set({
+      checkedIds: checked.includes(id)
+        ? checked.filter((c) => c !== id)
+        : [...checked, id],
+    });
+  },
+  clearChecked: () => set({ checkedIds: [] }),
 
   setPendingIn: (t) => set({ pendingIn: t }),
 
@@ -239,7 +265,13 @@ export const useStore = create<State>()((set, get) => ({
       });
       const statuses: Record<number, CandidateStatus> = {};
       for (const c of analysis.candidates) statuses[c.id] = "pending";
-      set({ analysis, candidateStatus: statuses, selection: null, analysisError: null });
+      set({
+        analysis,
+        candidateStatus: statuses,
+        selection: null,
+        checkedIds: [],
+        analysisError: null,
+      });
     } catch (e) {
       set({ analysisError: String(e) });
     } finally {

@@ -27,7 +27,7 @@ same file size, no re-encoding.
 | `Space` | play / pause |
 | `[` `]` | previous / next detected scare |
 | `Enter` | cut the selected scare |
-| `Delete` | keep the selected scare / remove manual cut |
+| `Delete` | ignore the selected scare / remove manual cut |
 | `I` `O` | mark a manual cut in / out |
 | `,` `.` | frame step |
 | `E` | export clean copy |
