@@ -148,4 +148,4 @@ Issues and pull requests are welcome. For larger changes, open an issue first so
 
 ## License
 
-No license file is published yet — all rights reserved until one is added. If you want to use this in a product or redistribute it, open an issue.
+[MIT](LICENSE) — free to use, modify, and redistribute, including commercially. Attribution required.
