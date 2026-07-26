@@ -16,6 +16,11 @@ pub fn run() {
             proxy::generate_proxy,
             export::export_video,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                media::kill_all_children();
+            }
+        });
 }

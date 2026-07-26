@@ -1,5 +1,7 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use tauri::Manager;
 
 /// GUI apps launched from Finder don't inherit the shell PATH, so fall back to
@@ -59,14 +61,77 @@ pub fn cache_dir_for(app: &tauri::AppHandle, input: &str) -> Result<PathBuf, Str
     Ok(dir)
 }
 
+fn child_pids() -> &'static Mutex<HashSet<u32>> {
+    static PIDS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
+    PIDS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Kill any ffmpeg/ffprobe children still running (called on app exit so a
+/// half-finished proxy or export doesn't linger as an orphan).
+pub fn kill_all_children() {
+    let pids: Vec<u32> = child_pids().lock().map(|s| s.iter().copied().collect()).unwrap_or_default();
+    for pid in pids {
+        let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+    }
+}
+
+/// Tracks which cache dirs have a job running, so a duplicate import can't
+/// start a second ffmpeg racing on the same output files.
+fn jobs_in_flight() -> &'static Mutex<HashSet<String>> {
+    static JOBS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    JOBS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+pub struct JobGuard(String);
+
+impl JobGuard {
+    pub fn acquire(key: String) -> Result<Self, String> {
+        let mut jobs = jobs_in_flight().lock().map_err(|e| e.to_string())?;
+        if !jobs.insert(key.clone()) {
+            return Err("This movie is already being processed.".into());
+        }
+        Ok(JobGuard(key))
+    }
+}
+
+impl Drop for JobGuard {
+    fn drop(&mut self) {
+        if let Ok(mut jobs) = jobs_in_flight().lock() {
+            jobs.remove(&self.0);
+        }
+    }
+}
+
 pub fn spawn(cmd: &str, args: &[&str]) -> Result<Child, String> {
-    Command::new(cmd)
+    let child = Command::new(cmd)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("failed to start {cmd}: {e}"))
+        .map_err(|e| format!("failed to start {cmd}: {e}"))?;
+    if let Ok(mut pids) = child_pids().lock() {
+        pids.insert(child.id());
+    }
+    Ok(child)
+}
+
+/// Drains stderr on its own thread while the caller reads stdout. Without
+/// this, a chatty ffmpeg fills the 64KB stderr pipe, blocks on write, and the
+/// whole job deadlocks. Returns the last few lines for error reporting.
+pub fn drain_stderr(child: &mut Child) -> Option<std::thread::JoinHandle<String>> {
+    let stderr = child.stderr.take()?;
+    Some(std::thread::spawn(move || {
+        use std::io::BufRead;
+        let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+        for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
+            if tail.len() >= 10 {
+                tail.pop_front();
+            }
+            tail.push_back(line);
+        }
+        tail.into_iter().collect::<Vec<_>>().join("\n")
+    }))
 }
 
 /// Reads `-progress pipe:1` key=value output from ffmpeg stdout and reports
@@ -83,20 +148,23 @@ pub fn read_progress<R: std::io::BufRead>(reader: R, mut on_time: impl FnMut(f64
     }
 }
 
-pub fn wait_checked(mut child: Child, context: &str) -> Result<(), String> {
-    let mut stderr_tail = String::new();
-    if let Some(err) = child.stderr.take() {
-        use std::io::Read;
-        let mut buf = String::new();
-        let mut reader = std::io::BufReader::new(err);
-        let _ = reader.read_to_string(&mut buf);
-        let tail: Vec<&str> = buf.lines().rev().take(8).collect();
-        stderr_tail = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+pub fn wait_checked(
+    mut child: Child,
+    context: &str,
+    stderr_drain: Option<std::thread::JoinHandle<String>>,
+) -> Result<(), String> {
+    let pid = child.id();
+    let status = child.wait().map_err(|e| e.to_string());
+    if let Ok(mut pids) = child_pids().lock() {
+        pids.remove(&pid);
     }
-    let status = child.wait().map_err(|e| e.to_string())?;
+    let tail = stderr_drain
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+    let status = status?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("{context} failed:\n{stderr_tail}"))
+        Err(format!("{context} failed:\n{tail}"))
     }
 }

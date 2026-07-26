@@ -59,6 +59,7 @@ pub async fn analyze_audio(
 /// Runs ffmpeg's ebur128 filter over the first audio track (cached per file).
 fn ensure_series(app: &tauri::AppHandle, path: &str, duration: f64) -> Result<Series, String> {
     let cache = media::cache_dir_for(app, path)?.join("loudness.json");
+    let _guard = media::JobGuard::acquire(format!("analyze:{}", cache.display()))?;
     if let Ok(bytes) = std::fs::read(&cache) {
         if let Ok(series) = serde_json::from_slice::<Series>(&bytes) {
             if !series.t.is_empty() {
@@ -120,6 +121,9 @@ fn ensure_series(app: &tauri::AppHandle, path: &str, duration: f64) -> Result<Se
 
 /// ebur128 lines look like:
 /// `[Parsed_ebur128_0 @ 0x...] t: 2.10233  TARGET:-23 LUFS  M: -18.5 S: -19.2  I: -20.1 LUFS ...`
+/// Values are printed with `%6.1f`, so anything at or below -100 glues to its
+/// label with no space ("M:-120.7") — both forms must parse, or deep silence
+/// (exactly what precedes a jump scare) silently drops out of the series.
 fn parse_ebur128_line(line: &str) -> Option<(f64, f64, f64)> {
     if !line.contains("t:") || !line.contains("M:") {
         return None;
@@ -129,12 +133,18 @@ fn parse_ebur128_line(line: &str) -> Option<(f64, f64, f64)> {
     let mut s = None;
     let mut tokens = line.split_whitespace().peekable();
     while let Some(tok) = tokens.next() {
-        match tok {
-            "t:" => t = tokens.peek().and_then(|v| v.parse::<f64>().ok()),
-            "M:" => m = tokens.peek().and_then(|v| v.parse::<f64>().ok()),
-            "S:" => s = tokens.peek().and_then(|v| v.parse::<f64>().ok()),
-            _ => {}
-        }
+        let slot = match tok.split_inclusive(':').next() {
+            Some("t:") => &mut t,
+            Some("M:") => &mut m,
+            Some("S:") => &mut s,
+            _ => continue,
+        };
+        let glued = &tok[2..];
+        *slot = if glued.is_empty() {
+            tokens.peek().and_then(|v| v.parse::<f64>().ok())
+        } else {
+            glued.parse::<f64>().ok()
+        };
     }
     match (t, m, s) {
         (Some(t), Some(m), Some(s)) => Some((t, m, s)),
@@ -254,6 +264,16 @@ mod tests {
             m: vec![-50.0; n],
             s: vec![-50.0; n],
         }
+    }
+
+    #[test]
+    fn parses_spaced_and_glued_ebur128_values() {
+        let spaced = "[Parsed_ebur128_0 @ 0x123] t: 2.10233    TARGET:-23 LUFS    M: -18.5 S: -19.2     I: -20.1 LUFS       LRA: 3.2 LU";
+        assert_eq!(parse_ebur128_line(spaced), Some((2.10233, -18.5, -19.2)));
+        // deep silence: %6.1f leaves no space before values at/below -100
+        let glued = "[Parsed_ebur128_0 @ 0x123] t: 0.199979   TARGET:-23 LUFS    M:-120.7 S:-120.7     I: -70.0 LUFS       LRA: 0.0 LU";
+        assert_eq!(parse_ebur128_line(glued), Some((0.199979, -120.7, -120.7)));
+        assert_eq!(parse_ebur128_line("size=N/A time=00:01:00 bitrate=N/A"), None);
     }
 
     #[test]

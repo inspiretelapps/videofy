@@ -129,6 +129,7 @@ pub async fn export_video(
             &out_path,
         ];
         let mut child = media::spawn(&ffmpeg, &args)?;
+        let stderr_drain = media::drain_stderr(&mut child);
         if let Some(stdout) = child.stdout.take() {
             let reader = std::io::BufReader::new(stdout);
             media::read_progress(reader, |t| {
@@ -136,7 +137,7 @@ pub async fn export_video(
                 let _ = app.emit("export-progress", serde_json::json!({ "t": t, "pct": pct }));
             });
         }
-        media::wait_checked(child, "export")?;
+        media::wait_checked(child, "export", stderr_drain)?;
 
         let size = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
         let _ = app.emit("export-progress", serde_json::json!({ "t": kept, "pct": 100.0 }));

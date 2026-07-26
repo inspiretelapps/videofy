@@ -13,12 +13,20 @@ pub async fn generate_proxy(
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = media::cache_dir_for(&app, &path)?;
+        let _guard = media::JobGuard::acquire(format!("proxy:{}", dir.display()))?;
         let proxy = dir.join("proxy.mp4");
         if proxy.exists() {
             return Ok(proxy.to_string_lossy().to_string());
         }
-        let tmp = dir.join("proxy.tmp.mp4");
-        let _ = std::fs::remove_file(&tmp);
+        // clear tmp files orphaned by a previous crash or force-quit
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                if entry.file_name().to_string_lossy().starts_with("proxy.tmp") {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+        let tmp = dir.join(format!("proxy.tmp.{}.mp4", std::process::id()));
 
         let target_height = source_height.min(540);
         // force even dimensions for h264
@@ -39,6 +47,7 @@ pub async fn generate_proxy(
             &tmp_str,
         ];
         let mut child = media::spawn(&ffmpeg, &args)?;
+        let stderr_drain = media::drain_stderr(&mut child);
 
         if let Some(stdout) = child.stdout.take() {
             let reader = std::io::BufReader::new(stdout);
@@ -47,7 +56,7 @@ pub async fn generate_proxy(
                 let _ = app.emit("proxy-progress", serde_json::json!({ "t": t, "pct": pct }));
             });
         }
-        media::wait_checked(child, "proxy generation")?;
+        media::wait_checked(child, "proxy generation", stderr_drain)?;
         std::fs::rename(&tmp, &proxy).map_err(|e| e.to_string())?;
         let _ = app.emit("proxy-progress", serde_json::json!({ "t": duration, "pct": 100.0 }));
         Ok(proxy.to_string_lossy().to_string())

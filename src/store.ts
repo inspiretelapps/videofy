@@ -99,6 +99,8 @@ export const useStore = create<State>()((set, get) => ({
   exporting: null,
 
   openFile: async (path: string) => {
+    // guards against double-fired drop events racing two imports
+    if (get().stage === "importing") return;
     if (!listenersAttached) {
       listenersAttached = true;
       void listen<{ pct: number }>("proxy-progress", (e) =>
