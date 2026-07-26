@@ -2,12 +2,13 @@ import { useStore } from "../store";
 import { fmtTime } from "../lib/format";
 
 export default function TransportBar() {
-  const playing = useStore((s) => s.playing);
-  const setPlaying = useStore((s) => s.setPlaying);
+  const shuttle = useStore((s) => s.shuttle);
+  const setShuttle = useStore((s) => s.setShuttle);
   const playhead = useStore((s) => s.playhead);
   const seekTo = useStore((s) => s.seekTo);
   const pendingIn = useStore((s) => s.pendingIn);
   const info = useStore((s) => s.info);
+  const playing = shuttle !== 0;
 
   return (
     <div className="flex h-12 shrink-0 items-center gap-4 border-t border-seam bg-bay/60 px-4">
@@ -16,7 +17,7 @@ export default function TransportBar() {
           ⟲10
         </IconButton>
         <button
-          onClick={() => setPlaying(!playing)}
+          onClick={() => setShuttle(playing ? 0 : 1)}
           aria-label={playing ? "Pause" : "Play"}
           className="mx-1 flex h-8 w-8 items-center justify-center rounded-full bg-glow text-well transition-transform hover:scale-105"
         >
@@ -32,6 +33,12 @@ export default function TransportBar() {
         <span className="text-faint"> / {fmtTime(info?.duration ?? 0)}</span>
       </p>
 
+      {shuttle !== 0 && shuttle !== 1 && (
+        <p className="rounded bg-glow/10 px-2 py-0.5 font-mono text-[11px] text-glow">
+          {shuttle < 0 ? "◂" : "▸"} {Math.abs(shuttle)}×
+        </p>
+      )}
+
       {pendingIn !== null && (
         <p className="rounded bg-amber/15 px-2 py-0.5 font-mono text-[11px] text-amber">
           IN {fmtTime(pendingIn, true)} — press O to finish the cut
@@ -39,7 +46,7 @@ export default function TransportBar() {
       )}
 
       <div className="ml-auto hidden items-center gap-3 font-mono text-[10px] text-faint lg:flex">
-        <Hint k="space">play</Hint>
+        <Hint k="J K L">shuttle</Hint>
         <Hint k="I / O">mark cut</Hint>
         <Hint k="⏎">cut selected</Hint>
         <Hint k="[ ]">prev / next scare</Hint>

@@ -1,14 +1,20 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "../store";
 
+const REVERSE_STEP_S = 0.08; // seek-step cadence for reverse shuttle
+
 export default function Player() {
   const proxyUrl = useStore((s) => s.proxyUrl);
-  const playing = useStore((s) => s.playing);
+  const shuttle = useStore((s) => s.shuttle);
   const seekReq = useStore((s) => s.seekReq);
   const setPlayhead = useStore((s) => s.setPlayhead);
-  const setPlaying = useStore((s) => s.setPlaying);
   const videoRef = useRef<HTMLVideoElement>(null);
   const rafRef = useRef(0);
+  const shuttleRef = useRef(0);
+
+  useEffect(() => {
+    shuttleRef.current = shuttle;
+  }, [shuttle]);
 
   // seek requests from the timeline / panel
   useEffect(() => {
@@ -16,22 +22,42 @@ export default function Player() {
     if (v && Number.isFinite(seekReq.t)) v.currentTime = seekReq.t;
   }, [seekReq]);
 
-  // play/pause driven by the store
+  // forward shuttle uses native playback; reverse pauses and step-seeks below
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    if (playing) {
-      void v.play().catch(() => setPlaying(false));
+    if (shuttle > 0) {
+      v.playbackRate = Math.min(shuttle, 16);
+      void v.play().catch(() => useStore.getState().setShuttle(0));
     } else {
       v.pause();
+      v.playbackRate = 1;
     }
-  }, [playing, setPlaying]);
+  }, [shuttle]);
 
-  // report time continuously while playing
+  // report time while playing; drive reverse shuttle with stepped seeks
   useEffect(() => {
-    const tick = () => {
+    let last = performance.now();
+    let reverseAcc = 0;
+    const tick = (now: number) => {
+      const dt = Math.min(0.25, (now - last) / 1000);
+      last = now;
       const v = videoRef.current;
-      if (v && !v.paused) setPlayhead(v.currentTime);
+      if (v) {
+        const rate = shuttleRef.current;
+        if (rate < 0) {
+          reverseAcc += dt;
+          if (reverseAcc >= REVERSE_STEP_S) {
+            const next = Math.max(0, v.currentTime + rate * reverseAcc);
+            reverseAcc = 0;
+            v.currentTime = next;
+            setPlayhead(next);
+            if (next <= 0) useStore.getState().setShuttle(0);
+          }
+        } else if (!v.paused) {
+          setPlayhead(v.currentTime);
+        }
+      }
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
@@ -47,8 +73,11 @@ export default function Player() {
           className="max-h-full max-w-full"
           playsInline
           preload="auto"
-          onClick={() => setPlaying(!playing)}
-          onEnded={() => setPlaying(false)}
+          onClick={() => {
+            const s = useStore.getState();
+            s.setShuttle(s.shuttle !== 0 ? 0 : 1);
+          }}
+          onEnded={() => useStore.getState().setShuttle(0)}
         />
       ) : (
         <p className="text-sm text-faint">No preview available</p>

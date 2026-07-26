@@ -15,7 +15,22 @@ export function useShortcuts() {
       switch (e.key) {
         case " ":
           e.preventDefault();
-          s.setPlaying(!s.playing);
+          s.setShuttle(s.shuttle !== 0 ? 0 : 1);
+          break;
+        // JKL shuttle: repeated presses double the speed, up to 8x
+        case "j":
+        case "J":
+          if (!e.repeat)
+            s.setShuttle(s.shuttle >= 0 ? -1 : Math.max(-8, s.shuttle * 2));
+          break;
+        case "k":
+        case "K":
+          if (!e.repeat) s.setShuttle(0);
+          break;
+        case "l":
+        case "L":
+          if (!e.repeat)
+            s.setShuttle(s.shuttle <= 0 ? 1 : Math.min(8, s.shuttle * 2));
           break;
         case "ArrowLeft":
           e.preventDefault();
@@ -26,11 +41,11 @@ export function useShortcuts() {
           s.seekTo(s.playhead + (e.shiftKey ? 10 : 1));
           break;
         case ",":
-          s.setPlaying(false);
+          s.setShuttle(0);
           s.seekTo(s.playhead - frame);
           break;
         case ".":
-          s.setPlaying(false);
+          s.setShuttle(0);
           s.seekTo(s.playhead + frame);
           break;
         case "i":

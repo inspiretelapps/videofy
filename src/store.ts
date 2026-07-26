@@ -60,7 +60,11 @@ interface State {
   checkedIds: number[];
 
   playhead: number;
-  playing: boolean;
+  /**
+   * Shuttle rate: 0 = paused, 1 = normal play, 2/4/8 = fast forward,
+   * negative = reverse (stepped seeks — HTML5 video can't play backward).
+   */
+  shuttle: number;
   seekReq: { t: number; n: number };
   view: { t0: number; t1: number };
 
@@ -70,7 +74,7 @@ interface State {
   reset: () => void;
   setPlayhead: (t: number) => void;
   seekTo: (t: number) => void;
-  setPlaying: (p: boolean) => void;
+  setShuttle: (rate: number) => void;
   setView: (t0: number, t1: number) => void;
   zoomToRange: (start: number, end: number) => void;
   select: (sel: Selection | null) => void;
@@ -113,7 +117,7 @@ export const useStore = create<State>()((set, get) => ({
   minIntensity: 0,
   checkedIds: [],
   playhead: 0,
-  playing: false,
+  shuttle: 0,
   seekReq: { t: 0, n: 0 },
   view: { t0: 0, t1: 1 },
   exporting: null,
@@ -186,7 +190,7 @@ export const useStore = create<State>()((set, get) => ({
         pendingIn: null,
         checkedIds: [],
         playhead: 0,
-        playing: false,
+        shuttle: 0,
         view: { t0: 0, t1: info.duration },
       });
     } catch (e) {
@@ -207,7 +211,7 @@ export const useStore = create<State>()((set, get) => ({
       manualCuts: [],
       selection: null,
       pendingIn: null,
-      playing: false,
+      shuttle: 0,
       exporting: null,
     }),
 
@@ -217,7 +221,7 @@ export const useStore = create<State>()((set, get) => ({
     const clamped = Math.min(Math.max(0, t), d);
     set({ playhead: clamped, seekReq: { t: clamped, n: get().seekReq.n + 1 } });
   },
-  setPlaying: (p) => set({ playing: p }),
+  setShuttle: (rate) => set({ shuttle: rate }),
   setView: (t0, t1) => set({ view: { t0, t1 } }),
 
   zoomToRange: (start, end) => {

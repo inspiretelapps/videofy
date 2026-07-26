@@ -25,6 +25,7 @@ same file size, no re-encoding.
 | Key | Action |
 | --- | --- |
 | `Space` | play / pause |
+| `J` `K` `L` | shuttle: reverse / stop / forward — press `J` or `L` again for 2×, 4×, 8× |
 | `[` `]` | previous / next detected scare |
 | `Enter` | cut the selected scare |
 | `Delete` | ignore the selected scare / remove manual cut |
