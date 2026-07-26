@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+@theme {
+  /* projection-booth palette: warm near-black, screen-glow text, ember accents */
+  --color-booth: #141210;
+  --color-bay: #1d1a17;
+  --color-well: #100e0c;
+  --color-seam: #2c2823;
+  --color-glow: #ece5d8;
+  --color-dust: #93897c;
+  --color-faint: #5c554b;
+  --color-flare: #e4572e;
+  --color-amber: #e39a2d;
+
+  --font-display: "Bricolage Grotesque Variable", system-ui, sans-serif;
+  --font-body: "Figtree Variable", system-ui, sans-serif;
+  --font-mono: "Martian Mono Variable", ui-monospace, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--color-booth);
+  color: var(--color-glow);
+  font-family: var(--font-body);
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-amber);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-seam);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* film-leader hatch for regions marked to be cut */
+.hatch-flare {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--color-flare) 28%, transparent) 0px,
+    color-mix(in srgb, var(--color-flare) 28%, transparent) 3px,
+    transparent 3px,
+    transparent 9px
+  );
+}
+
+@keyframes ember-pulse {
+  0%,
+  100% {
+    opacity: 0.75;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.ember-pulse {
+  animation: ember-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise-in {
+  animation: rise-in 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ember-pulse,
+  .rise-in {
+    animation: none;
+  }
+}
