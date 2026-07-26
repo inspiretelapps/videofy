@@ -18,6 +18,7 @@ export default function Editor() {
         analysis: s.analysis,
         candidateStatus: s.candidateStatus,
         manualCuts: s.manualCuts,
+        showDetections: s.showDetections,
       }).length,
   );
 

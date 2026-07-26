@@ -58,6 +58,8 @@ interface State {
   sortBy: SortBy;
   minIntensity: MinIntensity;
   checkedIds: number[];
+  /** When false, detections vanish everywhere and are excluded from export. */
+  showDetections: boolean;
 
   playhead: number;
   /**
@@ -84,6 +86,7 @@ interface State {
   setMinIntensity: (m: MinIntensity) => void;
   toggleChecked: (id: number) => void;
   clearChecked: () => void;
+  toggleDetections: () => void;
   setPendingIn: (t: number | null) => void;
   commitOut: (t: number) => void;
   removeManualCut: (id: number) => void;
@@ -116,6 +119,7 @@ export const useStore = create<State>()((set, get) => ({
   sortBy: "time",
   minIntensity: 0,
   checkedIds: [],
+  showDetections: true,
   playhead: 0,
   shuttle: 0,
   seekReq: { t: 0, n: 0 },
@@ -260,6 +264,16 @@ export const useStore = create<State>()((set, get) => ({
   },
   clearChecked: () => set({ checkedIds: [] }),
 
+  toggleDetections: () => {
+    const showing = get().showDetections;
+    set({
+      showDetections: !showing,
+      // a hidden candidate can't stay selected
+      selection:
+        showing && get().selection?.kind === "candidate" ? null : get().selection,
+    });
+  },
+
   setPendingIn: (t) => set({ pendingIn: t }),
 
   commitOut: (t) => {
@@ -375,10 +389,13 @@ export function deriveCuts(s: {
   analysis: AnalysisResult | null;
   candidateStatus: Record<number, CandidateStatus>;
   manualCuts: ManualCut[];
+  showDetections: boolean;
 }): Cut[] {
   const cuts: Cut[] = [];
-  for (const c of s.analysis?.candidates ?? []) {
-    if (s.candidateStatus[c.id] === "cut") cuts.push({ start: c.start, end: c.end });
+  if (s.showDetections) {
+    for (const c of s.analysis?.candidates ?? []) {
+      if (s.candidateStatus[c.id] === "cut") cuts.push({ start: c.start, end: c.end });
+    }
   }
   for (const m of s.manualCuts) cuts.push({ start: m.start, end: m.end });
   cuts.sort((a, b) => a.start - b.start);

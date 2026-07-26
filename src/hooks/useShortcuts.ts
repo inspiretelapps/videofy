@@ -77,15 +77,45 @@ export function useShortcuts() {
         }
         case "[":
         case "]": {
-          if (candidates.length === 0) break;
+          // walk every visible cut region in time order: detections (when
+          // shown and above the intensity filter) plus manual cuts.
+          // Selection-relative stepping, NOT playhead-relative — jumping to a
+          // region parks the playhead before its start, which would make
+          // "next" match the same region forever.
+          const items = [
+            ...(s.showDetections
+              ? candidates
+                  .filter((c) => c.score >= s.minIntensity)
+                  .map((c) => ({
+                    kind: "candidate" as const,
+                    id: c.id,
+                    start: c.start,
+                    end: c.end,
+                  }))
+              : []),
+            ...s.manualCuts.map((m) => ({
+              kind: "manual" as const,
+              id: m.id,
+              start: m.start,
+              end: m.end,
+            })),
+          ].sort((a, b) => a.start - b.start);
+          if (items.length === 0) break;
           const next = e.key === "]";
-          const found = next
-            ? candidates.find((c) => c.peakTime > s.playhead + 0.5)
-            : [...candidates].reverse().find((c) => c.peakTime < s.playhead - 0.5);
-          const c = found ?? (next ? candidates[0] : candidates[candidates.length - 1]);
-          s.select({ kind: "candidate", id: c.id });
-          s.zoomToRange(c.start, c.end);
-          s.seekTo(Math.max(0, c.start - 1.5));
+          const sel = s.selection;
+          const curIdx = sel
+            ? items.findIndex((i) => i.kind === sel.kind && i.id === sel.id)
+            : -1;
+          const target =
+            curIdx >= 0
+              ? items[(curIdx + (next ? 1 : -1) + items.length) % items.length]
+              : next
+                ? (items.find((i) => i.start > s.playhead + 0.05) ?? items[0])
+                : ([...items].reverse().find((i) => i.start < s.playhead - 0.05) ??
+                  items[items.length - 1]);
+          s.select({ kind: target.kind, id: target.id });
+          s.zoomToRange(target.start, target.end);
+          s.seekTo(Math.max(0, target.start - 1.5));
           break;
         }
         case "e":

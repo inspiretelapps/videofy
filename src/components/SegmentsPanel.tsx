@@ -24,6 +24,8 @@ export default function SegmentsPanel() {
   const minIntensity = useStore((s) => s.minIntensity);
   const setMinIntensity = useStore((s) => s.setMinIntensity);
   const checkedIds = useStore((s) => s.checkedIds);
+  const showDetections = useStore((s) => s.showDetections);
+  const toggleDetections = useStore((s) => s.toggleDetections);
 
   const candidates = analysis?.candidates ?? [];
   const shown = candidates
@@ -47,9 +49,30 @@ export default function SegmentsPanel() {
           <h2 className="font-display text-sm font-semibold tracking-wide text-glow">
             Detected scares
           </h2>
-          <span className="font-mono text-[11px] text-faint">{candidates.length}</span>
+          <span className="flex items-baseline gap-2">
+            <span className="font-mono text-[11px] text-faint">{candidates.length}</span>
+            <button
+              onClick={toggleDetections}
+              className={`rounded px-1.5 py-0.5 text-[11px] transition-colors ${
+                showDetections
+                  ? "text-faint hover:bg-seam hover:text-glow"
+                  : "bg-amber/15 text-amber hover:bg-amber/25"
+              }`}
+            >
+              {showDetections ? "Hide" : "Show"}
+            </button>
+          </span>
         </div>
 
+        {!showDetections && (
+          <p className="mt-2 text-[11px] leading-snug text-dust">
+            Detections are hidden and won't be cut on export — you're in manual
+            mode. Mark cuts with <Kbd>I</Kbd> and <Kbd>O</Kbd>.
+          </p>
+        )}
+
+        {showDetections && (
+          <>
         <p className="mt-3 text-[10px] font-medium tracking-[0.15em] text-faint uppercase">
           Detection
         </p>
@@ -128,10 +151,12 @@ export default function SegmentsPanel() {
             </button>
           </div>
         )}
+          </>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
-        {analysisError ? (
+        {!showDetections ? null : analysisError ? (
           <p className="px-2 py-3 text-xs leading-relaxed text-dust">
             Couldn't analyze the audio, so nothing was detected automatically.
             You can still mark cuts by hand with <Kbd>I</Kbd> and <Kbd>O</Kbd>.
@@ -340,9 +365,10 @@ function SummaryFooter() {
   const analysis = useStore((s) => s.analysis);
   const candidateStatus = useStore((s) => s.candidateStatus);
   const manualCuts = useStore((s) => s.manualCuts);
-  const cutCandidates = (analysis?.candidates ?? []).filter(
-    (c) => candidateStatus[c.id] === "cut",
-  );
+  const showDetections = useStore((s) => s.showDetections);
+  const cutCandidates = showDetections
+    ? (analysis?.candidates ?? []).filter((c) => candidateStatus[c.id] === "cut")
+    : [];
   const totalCut =
     cutCandidates.reduce((acc, c) => acc + (c.end - c.start), 0) +
     manualCuts.reduce((acc, m) => acc + (m.end - m.start), 0);

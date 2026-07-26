@@ -23,6 +23,7 @@ export default function Timeline() {
   const waveform = useStore((s) => s.waveform);
   const candidateStatus = useStore((s) => s.candidateStatus);
   const manualCuts = useStore((s) => s.manualCuts);
+  const showDetections = useStore((s) => s.showDetections);
   const selection = useStore((s) => s.selection);
   const pendingIn = useStore((s) => s.pendingIn);
   const playhead = useStore((s) => s.playhead);
@@ -93,12 +94,14 @@ export default function Timeline() {
       for (const m of manualCuts) {
         if (t >= m.start && t <= m.end) return { kind: "manual" as const, id: m.id };
       }
-      for (const c of analysis?.candidates ?? []) {
-        if (t >= c.start && t <= c.end) return { kind: "candidate" as const, id: c.id };
+      if (showDetections) {
+        for (const c of analysis?.candidates ?? []) {
+          if (t >= c.start && t <= c.end) return { kind: "candidate" as const, id: c.id };
+        }
       }
       return null;
     },
-    [manualCuts, analysis],
+    [manualCuts, analysis, showDetections],
   );
 
   const onPointerDown = (e: React.PointerEvent) => {
@@ -284,14 +287,16 @@ export default function Timeline() {
       }
     };
 
-    for (const c of analysis?.candidates ?? []) {
-      drawRegion(
-        c.start,
-        c.end,
-        candidateStatus[c.id] ?? "pending",
-        c.score,
-        selection?.kind === "candidate" && selection.id === c.id,
-      );
+    if (showDetections) {
+      for (const c of analysis?.candidates ?? []) {
+        drawRegion(
+          c.start,
+          c.end,
+          candidateStatus[c.id] ?? "pending",
+          c.score,
+          selection?.kind === "candidate" && selection.id === c.id,
+        );
+      }
     }
     for (const m of manualCuts) {
       drawRegion(
@@ -387,6 +392,7 @@ export default function Timeline() {
     waveform,
     candidateStatus,
     manualCuts,
+    showDetections,
     selection,
     pendingIn,
     playhead,
