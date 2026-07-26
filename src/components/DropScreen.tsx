@@ -15,6 +15,7 @@ export default function DropScreen() {
   const info = useStore((s) => s.info);
   const proxyPct = useStore((s) => s.proxyPct);
   const analysisPct = useStore((s) => s.analysisPct);
+  const waveformPct = useStore((s) => s.waveformPct);
   const [hovering, setHovering] = useState(false);
 
   const importing = stage === "importing";
@@ -108,6 +109,7 @@ export default function DropScreen() {
             )}
             <div className="mt-6 space-y-4">
               <ProgressRow label="Listening for scares" pct={analysisPct} />
+              <ProgressRow label="Tracing the waveform" pct={waveformPct} />
               <ProgressRow label="Building preview" pct={proxyPct} />
             </div>
             <p className="mt-6 text-center text-xs text-faint">

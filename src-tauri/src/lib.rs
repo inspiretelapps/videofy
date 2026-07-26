@@ -3,6 +3,7 @@ mod export;
 mod media;
 mod probe;
 mod proxy;
+mod waveform;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -15,6 +16,7 @@ pub fn run() {
             analysis::analyze_audio,
             proxy::generate_proxy,
             export::export_video,
+            waveform::get_waveform,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

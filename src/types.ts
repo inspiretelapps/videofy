@@ -28,6 +28,17 @@ export interface AnalysisResult {
   candidates: ScareCandidate[];
 }
 
+export interface WaveformData {
+  dt: number;
+  left: number[];
+  right: number[];
+}
+
+/** Max-pooled downsample pyramid so the canvas never scans 240k buckets per frame. */
+export interface WaveformLevels {
+  levels: { dt: number; left: Uint8Array; right: Uint8Array }[];
+}
+
 export interface ExportResult {
   outPath: string;
   keptDuration: number;

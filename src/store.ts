@@ -10,6 +10,8 @@ import type {
   ManualCut,
   Selection,
   VideoInfo,
+  WaveformData,
+  WaveformLevels,
 } from "./types";
 
 export type Stage = "welcome" | "importing" | "editor";
@@ -42,9 +44,11 @@ interface State {
   analysisError: string | null;
   analyzing: boolean;
   sensitivity: Sensitivity;
+  waveform: WaveformLevels | null;
 
   proxyPct: number;
   analysisPct: number;
+  waveformPct: number;
 
   candidateStatus: Record<number, CandidateStatus>;
   manualCuts: ManualCut[];
@@ -96,8 +100,10 @@ export const useStore = create<State>()((set, get) => ({
   analysisError: null,
   analyzing: false,
   sensitivity: "balanced",
+  waveform: null,
   proxyPct: 0,
   analysisPct: 0,
+  waveformPct: 0,
   candidateStatus: {},
   manualCuts: [],
   nextManualId: 1,
@@ -123,12 +129,21 @@ export const useStore = create<State>()((set, get) => ({
       void listen<{ pct: number }>("analysis-progress", (e) =>
         set({ analysisPct: e.payload.pct }),
       );
+      void listen<{ pct: number }>("waveform-progress", (e) =>
+        set({ waveformPct: e.payload.pct }),
+      );
       void listen<{ pct: number }>("export-progress", (e) => {
         const ex = get().exporting;
         if (ex?.running) set({ exporting: { ...ex, pct: e.payload.pct } });
       });
     }
-    set({ stage: "importing", importError: null, proxyPct: 0, analysisPct: 0 });
+    set({
+      stage: "importing",
+      importError: null,
+      proxyPct: 0,
+      analysisPct: 0,
+      waveformPct: 0,
+    });
     try {
       const info = await invoke<VideoInfo>("probe_video", { path });
       set({ info });
@@ -146,7 +161,17 @@ export const useStore = create<State>()((set, get) => ({
         set({ analysisError: String(e) });
         return null;
       });
-      const [proxyPath, keyframes, analysis] = await Promise.all([proxyP, kfP, anaP]);
+      // waveform is display-only; a failure shouldn't block the import
+      const waveP = invoke<WaveformData>("get_waveform", {
+        path,
+        duration: info.duration,
+      }).catch(() => null);
+      const [proxyPath, keyframes, analysis, waveformData] = await Promise.all([
+        proxyP,
+        kfP,
+        anaP,
+        waveP,
+      ]);
       const statuses: Record<number, CandidateStatus> = {};
       for (const c of analysis?.candidates ?? []) statuses[c.id] = "pending";
       set({
@@ -154,6 +179,7 @@ export const useStore = create<State>()((set, get) => ({
         proxyUrl: convertFileSrc(proxyPath),
         keyframes,
         analysis,
+        waveform: waveformData ? buildWaveformLevels(waveformData) : null,
         candidateStatus: statuses,
         manualCuts: [],
         selection: null,
@@ -176,6 +202,7 @@ export const useStore = create<State>()((set, get) => ({
       keyframes: [],
       analysis: null,
       analysisError: null,
+      waveform: null,
       candidateStatus: {},
       manualCuts: [],
       selection: null,
@@ -308,6 +335,36 @@ export const useStore = create<State>()((set, get) => ({
 
   dismissExport: () => set({ exporting: null }),
 }));
+
+/**
+ * Max-pool the peak buckets into a pyramid of coarser levels (×4 each) so the
+ * timeline can pick a level with only a few buckets per pixel at any zoom.
+ */
+function buildWaveformLevels(data: WaveformData): WaveformLevels {
+  const pool = (src: Uint8Array): Uint8Array => {
+    const out = new Uint8Array(Math.ceil(src.length / 4));
+    for (let i = 0; i < out.length; i++) {
+      let m = 0;
+      for (let j = i * 4; j < Math.min(src.length, i * 4 + 4); j++) {
+        if (src[j] > m) m = src[j];
+      }
+      out[i] = m;
+    }
+    return out;
+  };
+  const levels = [
+    {
+      dt: data.dt,
+      left: Uint8Array.from(data.left),
+      right: Uint8Array.from(data.right),
+    },
+  ];
+  while (levels[levels.length - 1].left.length > 2048) {
+    const prev = levels[levels.length - 1];
+    levels.push({ dt: prev.dt * 4, left: pool(prev.left), right: pool(prev.right) });
+  }
+  return { levels };
+}
 
 /** Everything currently marked for removal, merged and sorted. */
 export function deriveCuts(s: {

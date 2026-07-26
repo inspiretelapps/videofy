@@ -7,6 +7,7 @@ const COLORS = {
   bg: "#100e0c",
   ridge: "rgba(147, 137, 124, 0.32)",
   crest: "rgba(147, 137, 124, 0.65)",
+  faintLabel: "rgba(92, 85, 75, 0.9)",
   flare: "#e4572e",
   amber: "#e39a2d",
   beam: "#f4efe4",
@@ -19,6 +20,7 @@ const RULER_H = 24;
 export default function Timeline() {
   const info = useStore((s) => s.info);
   const analysis = useStore((s) => s.analysis);
+  const waveform = useStore((s) => s.waveform);
   const candidateStatus = useStore((s) => s.candidateStatus);
   const manualCuts = useStore((s) => s.manualCuts);
   const selection = useStore((s) => s.selection);
@@ -142,8 +144,66 @@ export default function Timeline() {
     ctx.fillStyle = COLORS.bg;
     ctx.fillRect(0, 0, W, H);
 
-    // loudness ridge
-    if (analysis) {
+    if (waveform) {
+      // stereo peak waveform: L and R lanes, each mirrored around its center
+      const span = view.t1 - view.t0;
+      let level = waveform.levels[waveform.levels.length - 1];
+      for (const lv of waveform.levels) {
+        if (span / lv.dt / W <= 4) {
+          level = lv;
+          break;
+        }
+      }
+      const laneGap = 4;
+      const laneH = (waveH - laneGap) / 2;
+      const lanes: { data: Uint8Array; top: number; label: string }[] = [
+        { data: level.left, top: waveTop, label: "L" },
+        { data: level.right, top: waveTop + laneH + laneGap, label: "R" },
+      ];
+      for (const lane of lanes) {
+        const cy = lane.top + laneH / 2;
+        const maxAmp = laneH / 2 - 1;
+        // centerline
+        ctx.strokeStyle = "rgba(147, 137, 124, 0.28)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, cy + 0.5);
+        ctx.lineTo(W, cy + 0.5);
+        ctx.stroke();
+
+        const amps = new Float32Array(W + 1);
+        for (let px = 0; px <= W; px++) {
+          const iA = Math.max(0, Math.floor(tOf(px) / level.dt));
+          const iB = Math.min(lane.data.length - 1, Math.ceil(tOf(px + 1) / level.dt));
+          let peak = 0;
+          for (let i = iA; i <= iB; i++) {
+            if (lane.data[i] > peak) peak = lane.data[i];
+          }
+          // mild power curve so quiet movie audio stays visible
+          amps[px] = (peak / 255) ** 0.75 * maxAmp;
+        }
+        ctx.beginPath();
+        for (let px = 0; px <= W; px++) {
+          const y = cy - amps[px];
+          if (px === 0) ctx.moveTo(px, y);
+          else ctx.lineTo(px, y);
+        }
+        for (let px = W; px >= 0; px--) {
+          ctx.lineTo(px, cy + amps[px]);
+        }
+        ctx.closePath();
+        ctx.fillStyle = "rgba(196, 187, 171, 0.55)";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(236, 229, 216, 0.45)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.font = "8px 'Martian Mono Variable', monospace";
+        ctx.fillStyle = COLORS.faintLabel;
+        ctx.fillText(lane.label, 4, lane.top + 9);
+      }
+    } else if (analysis) {
+      // fallback when waveform extraction failed: mono loudness ridge
       const { envelope, envelopeDt } = analysis;
       const heightOf = (v: number) =>
         Math.max(0, Math.min(1, (v + 58) / 52)) * (waveH - 14);
@@ -324,6 +384,7 @@ export default function Timeline() {
     }
   }, [
     analysis,
+    waveform,
     candidateStatus,
     manualCuts,
     selection,
@@ -339,7 +400,7 @@ export default function Timeline() {
   return (
     <div
       ref={wrapRef}
-      className="relative h-44 shrink-0 cursor-crosshair border-t border-seam bg-well"
+      className="relative h-52 shrink-0 cursor-crosshair border-t border-seam bg-well"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
