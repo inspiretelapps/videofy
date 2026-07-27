@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Project notes are kept locally and are not published to GitHub.
+*.md
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
