@@ -9,13 +9,14 @@ it), `benchmark/README.md` (how to run the calibration harness),
 
 ## Where things stand
 
-Commit `d248cec` is pushed to `main`; it adds Quick manual edit and removes the
-low-quality Picture detector. The current workspace adds local-first external
-subtitle support: attach a subtitle while opening a movie, or let the scanner
-find a safely matching English sidecar file beside it. Online subtitle lookup
-is deliberately not part of the automatic scan. The workspace passes all 35
-Rust tests and the frontend/production builds; the signed bundle is installed
-and launch-checked at `/Applications/Videofy.app`.
+The current production version removes the low-quality Picture detector and
+adds local-first external subtitle support. Attach a subtitle while opening a
+movie, or let the scanner find a safely matching English sidecar file beside
+it. Online subtitle lookup is deliberately not part of the automatic scan.
+Quick manual edit was removed because waveform/proxy preparation dominated
+opening time regardless; manual cuts remain available in the editor. The
+workspace passes all 35 Rust tests and the frontend/production builds; the
+signed bundle is installed and launch-checked at `/Applications/Videofy.app`.
 
 Six commits since the last release point:
 

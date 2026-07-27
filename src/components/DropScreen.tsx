@@ -21,8 +21,6 @@ export default function DropScreen() {
   const proxyPct = useStore((s) => s.proxyPct);
   const analysisPct = useStore((s) => s.analysisPct);
   const waveformPct = useStore((s) => s.waveformPct);
-  const skipDetection = useStore((s) => s.skipDetection);
-  const setSkipDetection = useStore((s) => s.setSkipDetection);
   const [hovering, setHovering] = useState(false);
   const [subtitlePath, setSubtitlePath] = useState<string | null>(null);
 
@@ -88,26 +86,9 @@ export default function DropScreen() {
 
         {!importing ? (
           <>
-            <label className="mx-auto mt-8 flex max-w-md cursor-pointer items-start gap-3 rounded-lg border border-seam bg-bay/40 px-4 py-3 text-left transition-colors hover:border-faint">
-              <input
-                type="checkbox"
-                checked={skipDetection}
-                onChange={(event) => setSkipDetection(event.target.checked)}
-                className="mt-0.5 h-4 w-4 accent-[var(--color-flare)]"
-              />
-              <span>
-                <span className="block text-sm font-medium text-glow">
-                  Quick manual edit
-                </span>
-                <span className="mt-0.5 block text-xs leading-relaxed text-faint">
-                  Skip content detection and open only the editor, waveform, and
-                  export tools.
-                </span>
-              </span>
-            </label>
             <button
               onClick={browse}
-              className={`mt-5 block w-full rounded-xl border-2 border-dashed px-8 py-14 text-center transition-colors ${
+              className={`mt-8 block w-full rounded-xl border-2 border-dashed px-8 py-14 text-center transition-colors ${
                 hovering
                   ? "border-flare bg-flare/10"
                   : "border-seam bg-bay/40 hover:border-faint"
@@ -153,18 +134,11 @@ export default function DropScreen() {
               <p className="mt-4 text-center text-sm text-flare">{importError}</p>
             )}
             <div className="mt-10 flex justify-center gap-10 text-center">
-              {(skipDetection
-                ? [
-                    ["Open", "prepare preview and waveform"],
-                    ["Edit", "mark manual cuts on the timeline"],
-                    ["Export", "save your edited copy"],
-                  ]
-                : [
-                    ["Scan", "text, sound, guides"],
-                    ["Review", "cut, mute, or keep each clue"],
-                    ["Export", "clean copy for movie night"],
-                  ]
-              ).map(([title, sub]) => (
+              {[
+                ["Scan", "text, sound, guides"],
+                ["Review", "cut, mute, or keep each clue"],
+                ["Export", "clean copy for movie night"],
+              ].map(([title, sub]) => (
                 <div key={title} className="w-40">
                   <p className="font-display text-sm font-semibold text-glow">{title}</p>
                   <p className="mt-1 text-xs leading-snug text-faint">{sub}</p>
@@ -183,9 +157,7 @@ export default function DropScreen() {
               </p>
             )}
             <div className="mt-6 space-y-4">
-              {!skipDetection && (
-                <ProgressRow label="Preparing audio baseline" pct={analysisPct} />
-              )}
+              <ProgressRow label="Preparing audio baseline" pct={analysisPct} />
               <ProgressRow label="Tracing the waveform" pct={waveformPct} />
               <ProgressRow label="Building preview" pct={proxyPct} />
             </div>

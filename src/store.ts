@@ -112,7 +112,6 @@ interface State {
   categories: ContentCategory[];
   checkedIds: string[];
   showDetections: boolean;
-  skipDetection: boolean;
   subtitlePath: string | null;
 
   playhead: number;
@@ -145,7 +144,6 @@ interface State {
   toggleChecked: (id: string) => void;
   clearChecked: () => void;
   toggleDetections: () => void;
-  setSkipDetection: (skip: boolean) => void;
   setPendingIn: (time: number | null) => void;
   commitOut: (time: number) => void;
   removeManualCut: (id: number) => void;
@@ -211,7 +209,6 @@ export const useStore = create<State>()((set, get) => ({
   categories: [...ALL_CATEGORIES],
   checkedIds: [],
   showDetections: true,
-  skipDetection: false,
   subtitlePath: null,
   playhead: 0,
   shuttle: 0,
@@ -225,7 +222,6 @@ export const useStore = create<State>()((set, get) => ({
 
   openFile: async (path, selectedSubtitlePath = null) => {
     if (get().stage === "importing") return;
-    const skipDetection = get().skipDetection;
     attachListeners(set, get);
     set({
       stage: "importing",
@@ -239,8 +235,8 @@ export const useStore = create<State>()((set, get) => ({
       eventStatus: {},
       manualCuts: [],
       scans: {
-        text: idleScan(skipDetection ? "Skipped · manual edit" : "Waiting"),
-        audio: idleScan(skipDetection ? "Skipped · manual edit" : "Waiting"),
+        text: idleScan("Waiting"),
+        audio: idleScan("Waiting"),
         guide: idleScan("Optional"),
       },
     });
@@ -265,16 +261,14 @@ export const useStore = create<State>()((set, get) => ({
         sourceHeight: info.height,
       });
       const keyframesP = invoke<number[]>("get_keyframes", { path });
-      const loudnessP = skipDetection
-        ? Promise.resolve<AnalysisResult | null>(null)
-        : invoke<AnalysisResult>("analyze_audio", {
-            path,
-            duration: info.duration,
-            sensitivity: SENSITIVITY_VALUE[get().sensitivity],
-          }).catch((error) => {
-            set({ analysisError: String(error) });
-            return null;
-          });
+      const loudnessP = invoke<AnalysisResult>("analyze_audio", {
+        path,
+        duration: info.duration,
+        sensitivity: SENSITIVITY_VALUE[get().sensitivity],
+      }).catch((error) => {
+        set({ analysisError: String(error) });
+        return null;
+      });
       const waveformP = invoke<WaveformData>("get_waveform", {
         path,
         duration: info.duration,
@@ -308,7 +302,7 @@ export const useStore = create<State>()((set, get) => ({
         shuttle: 0,
         view: { t0: 0, t1: info.duration },
       });
-      if (!skipDetection) void get().runDeepScan();
+      void get().runDeepScan();
     } catch (error) {
       set({ stage: "welcome", importError: String(error), info: null });
     }
@@ -516,7 +510,6 @@ export const useStore = create<State>()((set, get) => ({
       selection: showing && get().selection?.kind === "event" ? null : get().selection,
     });
   },
-  setSkipDetection: (skipDetection) => set({ skipDetection }),
   setPendingIn: (time) => set({ pendingIn: time }),
   commitOut: (time) => {
     const { pendingIn, manualCuts, nextManualId } = get();
