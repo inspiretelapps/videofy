@@ -17,6 +17,7 @@ export default function Player() {
   const rafRef = useRef(0);
   const shuttleRef = useRef(0);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [mediaState, setMediaState] = useState("loading…");
 
   useEffect(() => {
     shuttleRef.current = shuttle;
@@ -102,10 +103,31 @@ export default function Player() {
             s.setShuttle(s.shuttle !== 0 ? 0 : 1);
           }}
           onEnded={() => useStore.getState().setShuttle(0)}
+          onLoadedMetadata={(e) => {
+            const v = e.currentTarget;
+            setMediaState(
+              `ready · ${v.videoWidth}x${v.videoHeight} · ${v.duration.toFixed(0)}s · audio=${
+                // Safari-only, but the whole point here is Safari.
+                (v as HTMLVideoElement & { webkitAudioDecodedByteCount?: number })
+                  .webkitAudioDecodedByteCount !== undefined
+                  ? "decoding"
+                  : "unknown"
+              }`,
+            );
+          }}
+          onError={(e) => {
+            const err = e.currentTarget.error;
+            setPlaybackError(
+              `media error ${err?.code ?? "?"}: ${err?.message || "could not load the preview"}`,
+            );
+          }}
         />
       ) : (
         <p className="text-sm text-faint">No preview available</p>
       )}
+      <p className="pointer-events-none absolute top-2 left-2 rounded bg-well/70 px-2 py-1 font-mono text-[10px] text-faint">
+        {mediaState}
+      </p>
       {playbackError && (
         <p className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded bg-flare/20 px-3 py-1.5 text-[11px] text-glow">
           Playback was blocked: {playbackError}

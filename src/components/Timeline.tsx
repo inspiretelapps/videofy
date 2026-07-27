@@ -107,10 +107,18 @@ export default function Timeline() {
   );
 
   const onPointerDown = (e: React.PointerEvent) => {
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    dragRef.current = { startX: e.clientX, moved: false };
+    // Seek FIRST. setPointerCapture is only an enhancement for dragging, but
+    // it can throw in some webviews — and when it did, it took the seek down
+    // with it and the click looked like it was ignored entirely.
     const rect = wrapRef.current!.getBoundingClientRect();
     seekTo(tOf(e.clientX - rect.left));
+    dragRef.current = { startX: e.clientX, moved: false };
+    try {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      // Dragging still works via the move handler; capture just makes it
+      // survive leaving the element.
+    }
   };
   const onPointerMove = (e: React.PointerEvent) => {
     const rect = wrapRef.current!.getBoundingClientRect();
