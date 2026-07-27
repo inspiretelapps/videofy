@@ -14,7 +14,7 @@ pub async fn generate_proxy(
     tauri::async_runtime::spawn_blocking(move || {
         let dir = media::cache_dir_for(&app, &path)?;
         let _guard = media::JobGuard::acquire(format!("proxy:{}", dir.display()))?;
-        let proxy = dir.join("proxy-v2.mp4");
+        let proxy = dir.join("proxy-v3.mp4");
         if proxy.exists() {
             return Ok(proxy.to_string_lossy().to_string());
         }
@@ -24,13 +24,13 @@ pub async fn generate_proxy(
                 if entry
                     .file_name()
                     .to_string_lossy()
-                    .starts_with("proxy-v2.tmp")
+                    .starts_with("proxy-v3.tmp")
                 {
                     let _ = std::fs::remove_file(entry.path());
                 }
             }
         }
-        let tmp = dir.join(format!("proxy-v2.tmp.{}.mp4", std::process::id()));
+        let tmp = dir.join(format!("proxy-v3.tmp.{}.mp4", std::process::id()));
 
         let target_height = source_height.min(540);
         // force even dimensions for h264
@@ -72,6 +72,15 @@ pub async fn generate_proxy(
             "128k",
             "-ac",
             "2",
+            // Strip everything that is not picture or sound. ffmpeg's mp4
+            // muxer copies source chapters into a `text` track, which left the
+            // proxy with a third stream the webview had to make sense of —
+            // and WebKit responded by playing the video without any audio.
+            // export.rs already dropped chapters for the same reason.
+            "-map_chapters",
+            "-1",
+            "-dn",
+            "-sn",
             "-movflags",
             "+faststart",
             &tmp_str,
@@ -100,4 +109,21 @@ pub async fn generate_proxy(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    /// The proxy carried a chapter `text` track for as long as this command
+    /// existed, and WebKit answered by playing the picture with no sound.
+    /// These flags are load-bearing, not tidiness.
+    #[test]
+    fn strips_non_audiovisual_streams() {
+        let source = include_str!("proxy.rs");
+        for flag in ["\"-map_chapters\"", "\"-dn\"", "\"-sn\""] {
+            assert!(
+                source.contains(flag),
+                "proxy must keep {flag}: a stray stream silences audio in the webview"
+            );
+        }
+    }
 }

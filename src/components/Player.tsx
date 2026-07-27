@@ -149,16 +149,24 @@ export default function Player() {
         }
         if (now - lastReport >= 500) {
           lastReport = now;
-          const decoded =
-            (v as HTMLVideoElement & { webkitAudioDecodedByteCount?: number })
-              .webkitAudioDecodedByteCount ?? -1;
-          const delta = decoded - audioBytesRef.current;
-          audioBytesRef.current = decoded;
+          // audioTracks is the question that matters: does the webview
+          // believe this file has audio at all? If it reports 0 while ffprobe
+          // and VLC both see a stereo AAC track, the container is being
+          // parsed wrong and no amount of volume will help.
+          const media = v as HTMLVideoElement & {
+            audioTracks?: { length: number };
+            webkitAudioDecodedByteCount?: number;
+          };
+          const trackCount = media.audioTracks
+            ? String(media.audioTracks.length)
+            : "n/a";
+          const decoded = media.webkitAudioDecodedByteCount;
+          audioBytesRef.current = decoded ?? 0;
           setAudioReport(
-            decoded < 0
-              ? `audio: vol=${v.volume} muted=${v.muted} (no decode counter)`
-              : `audio: decoding ${delta > 0 ? "YES" : "no"} · ${(decoded / 1024).toFixed(0)}KB` +
-                  ` · vol=${v.volume} muted=${v.muted}${v.paused ? " (paused)" : ""}`,
+            `audio: tracks=${trackCount} ready=${v.readyState} net=${v.networkState}` +
+              ` vol=${v.volume} muted=${v.muted}` +
+              (decoded === undefined ? "" : ` bytes=${(decoded / 1024).toFixed(0)}KB`) +
+              (v.paused ? " (paused)" : ""),
           );
         }
       }
