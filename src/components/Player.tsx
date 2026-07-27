@@ -26,43 +26,40 @@ export default function Player() {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [sinkId, setSinkId] = useState("");
 
-  // Web Audio tap. Two jobs: it measures whether the element is actually
-  // producing signal (so "no sound" stops being a guess), and calling
-  // resume() inside the play gesture is itself the fix when WKWebView has
-  // parked the audio context in "suspended".
-  const audioRef = useRef<{
-    ctx: AudioContext;
-    analyser: AnalyserNode;
-    data: Uint8Array;
-  } | null>(null);
+  // Deliberately NOT routed through Web Audio. In Safari,
+  // createMediaElementSource on cross-origin media (this video is served from
+  // asset.localhost, the page from tauri.localhost) silences the element
+  // outright — the diagnostic would have become the bug. Safari exposes a
+  // decoded-byte counter instead, which measures the same thing and touches
+  // nothing.
+  const audioBytesRef = useRef(0);
 
-  const ensureAudioGraph = () => {
-    const v = videoRef.current;
-    if (!v || audioRef.current) return audioRef.current;
+  // Independent of the video: an oscillator proves whether this webview can
+  // make any sound at all, which splits "the app cannot play audio" from
+  // "this particular file's audio never arrives".
+  const playTestTone = () => {
     try {
       const Ctor =
         window.AudioContext ??
         (window as unknown as { webkitAudioContext?: typeof AudioContext })
           .webkitAudioContext;
-      if (!Ctor) return null;
+      if (!Ctor) {
+        setAudioReport("no AudioContext in this webview");
+        return;
+      }
       const ctx = new Ctor();
-      // createMediaElementSource may only be called once per element, and it
-      // reroutes the element's output — so the analyser must be connected
-      // through to the destination or playback goes silent.
-      const source = ctx.createMediaElementSource(v);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 512;
-      source.connect(analyser);
-      analyser.connect(ctx.destination);
-      audioRef.current = {
-        ctx,
-        analyser,
-        data: new Uint8Array(analyser.fftSize),
-      };
-      return audioRef.current;
+      void ctx.resume();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      gain.gain.value = 0.2;
+      osc.frequency.value = 440;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.5);
+      setAudioReport(`test tone sent · ctx=${ctx.state}`);
     } catch (error) {
-      setAudioReport(`audio graph failed: ${String(error)}`);
-      return null;
+      setAudioReport(`test tone failed: ${String(error)}`);
     }
   };
 
@@ -110,10 +107,6 @@ export default function Player() {
       v.playbackRate = Math.min(shuttle, 16);
       v.muted = false;
       v.volume = 1;
-      const graph = ensureAudioGraph();
-      if (graph && graph.ctx.state !== "running") {
-        void graph.ctx.resume().catch(() => {});
-      }
       void v
         .play()
         .then(() => setPlaybackError(null))
@@ -154,18 +147,18 @@ export default function Player() {
           lastPush = now;
           setPlayhead(v.currentTime);
         }
-        const graph = audioRef.current;
-        if (graph && now - lastReport >= 250) {
+        if (now - lastReport >= 500) {
           lastReport = now;
-          graph.analyser.getByteTimeDomainData(graph.data);
-          let peak = 0;
-          for (const sample of graph.data) {
-            peak = Math.max(peak, Math.abs(sample - 128));
-          }
-          const level = peak / 128;
+          const decoded =
+            (v as HTMLVideoElement & { webkitAudioDecodedByteCount?: number })
+              .webkitAudioDecodedByteCount ?? -1;
+          const delta = decoded - audioBytesRef.current;
+          audioBytesRef.current = decoded;
           setAudioReport(
-            `audio: ctx=${graph.ctx.state} level=${(level * 100).toFixed(0)}%` +
-              (v.paused ? " (paused)" : ""),
+            decoded < 0
+              ? `audio: vol=${v.volume} muted=${v.muted} (no decode counter)`
+              : `audio: decoding ${delta > 0 ? "YES" : "no"} · ${(decoded / 1024).toFixed(0)}KB` +
+                  ` · vol=${v.volume} muted=${v.muted}${v.paused ? " (paused)" : ""}`,
           );
         }
       }
@@ -210,6 +203,14 @@ export default function Player() {
         <span>{mediaState}</span>
         <span className="ml-2">{audioReport}</span>
       </div>
+
+      <button
+        onClick={playTestTone}
+        title="Play a 440Hz beep straight from the webview, bypassing the video"
+        className="absolute bottom-2 left-2 rounded border border-seam bg-well/80 px-2 py-1 text-[10px] text-dust hover:text-glow"
+      >
+        Test sound
+      </button>
 
       {devices.length > 0 && (
         <select
