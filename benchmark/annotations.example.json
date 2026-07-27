@@ -1,0 +1,28 @@
+{
+  "ranges": [
+    {
+      "start": "00:12:30",
+      "end": "00:13:05",
+      "categories": ["frightening", "violence"],
+      "note": "bear attack in the woods — the loud one"
+    },
+    {
+      "start": "00:41:18",
+      "end": "00:41:22",
+      "categories": ["language"],
+      "note": "single f-word, mute rather than cut"
+    },
+    {
+      "start": "01:02:44",
+      "end": "01:04:10",
+      "categories": ["disturbing"],
+      "note": "quiet — no loudness spike, no caption. Hard case on purpose."
+    },
+    {
+      "start": 4530.5,
+      "end": 4548.0,
+      "categories": [],
+      "note": "plain seconds also work; empty categories = any detection counts"
+    }
+  ]
+}

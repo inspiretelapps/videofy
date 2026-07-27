@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useStore } from "../store";
 import { fmtTime } from "../lib/format";
-import type { CandidateStatus } from "../types";
+import type { EventStatus } from "../types";
 
 const COLORS = {
   bg: "#100e0c",
@@ -20,8 +20,9 @@ const RULER_H = 24;
 export default function Timeline() {
   const info = useStore((s) => s.info);
   const analysis = useStore((s) => s.analysis);
+  const events = useStore((s) => s.events);
   const waveform = useStore((s) => s.waveform);
-  const candidateStatus = useStore((s) => s.candidateStatus);
+  const eventStatus = useStore((s) => s.eventStatus);
   const manualCuts = useStore((s) => s.manualCuts);
   const showDetections = useStore((s) => s.showDetections);
   const selection = useStore((s) => s.selection);
@@ -95,13 +96,14 @@ export default function Timeline() {
         if (t >= m.start && t <= m.end) return { kind: "manual" as const, id: m.id };
       }
       if (showDetections) {
-        for (const c of analysis?.candidates ?? []) {
-          if (t >= c.start && t <= c.end) return { kind: "candidate" as const, id: c.id };
+        for (const event of events) {
+          if (t >= event.start && t <= event.end)
+            return { kind: "event" as const, id: event.id };
         }
       }
       return null;
     },
-    [manualCuts, analysis, showDetections],
+    [manualCuts, events, showDetections],
   );
 
   const onPointerDown = (e: React.PointerEvent) => {
@@ -230,11 +232,11 @@ export default function Timeline() {
       ctx.stroke();
     }
 
-    // regions: scare candidates + manual cuts
+    // regions: content events + manual cuts
     const drawRegion = (
       start: number,
       end: number,
-      style: CandidateStatus | "manual",
+      style: EventStatus | "manual",
       score: number,
       selected: boolean,
     ) => {
@@ -272,6 +274,15 @@ export default function Timeline() {
         ctx.fillStyle =
           style === "manual" ? "rgba(227, 154, 45, 0.9)" : "rgba(228, 87, 46, 0.9)";
         ctx.fillRect(x0, waveBottom - 3, w, 3);
+      } else if (style === "mute") {
+        ctx.fillStyle = "rgba(227, 154, 45, 0.12)";
+        ctx.fillRect(x0, waveTop, w, waveH);
+        ctx.strokeStyle = "rgba(227, 154, 45, 0.7)";
+        ctx.setLineDash([3, 3]);
+        ctx.strokeRect(x0 + 0.5, waveTop + 1.5, w - 1, waveH - 3);
+        ctx.setLineDash([]);
+        ctx.fillStyle = "rgba(227, 154, 45, 0.9)";
+        ctx.fillRect(x0, waveBottom - 3, w, 3);
       } else {
         // kept: whisper of what was flagged
         ctx.strokeStyle = "rgba(147, 137, 124, 0.35)";
@@ -288,13 +299,13 @@ export default function Timeline() {
     };
 
     if (showDetections) {
-      for (const c of analysis?.candidates ?? []) {
+      for (const event of events) {
         drawRegion(
-          c.start,
-          c.end,
-          candidateStatus[c.id] ?? "pending",
-          c.score,
-          selection?.kind === "candidate" && selection.id === c.id,
+          event.start,
+          event.end,
+          eventStatus[event.id] ?? "pending",
+          event.confidence * 100,
+          selection?.kind === "event" && selection.id === event.id,
         );
       }
     }
@@ -389,8 +400,9 @@ export default function Timeline() {
     }
   }, [
     analysis,
+    events,
     waveform,
-    candidateStatus,
+    eventStatus,
     manualCuts,
     showDetections,
     selection,

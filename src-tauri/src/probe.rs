@@ -1,5 +1,24 @@
 use crate::media;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaTrack {
+    pub stream_index: u32,
+    pub kind: String,
+    pub codec: String,
+    pub language: Option<String>,
+    pub title: Option<String>,
+    pub is_default: bool,
+    pub is_forced: bool,
+    pub is_hearing_impaired: bool,
+    pub is_visual_impaired: bool,
+    pub is_text: bool,
+    /// Audio channel count; 0 for subtitle tracks. Used to pick an export
+    /// bitrate — 192k across six channels is audibly poor.
+    pub channels: u32,
+}
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -15,6 +34,7 @@ pub struct VideoInfo {
     pub video_codec: String,
     pub audio_codec: String,
     pub audio_tracks: u32,
+    pub tracks: Vec<MediaTrack>,
 }
 
 #[derive(Deserialize)]
@@ -32,13 +52,29 @@ struct FfFormat {
 
 #[derive(Deserialize)]
 struct FfStream {
+    index: Option<u32>,
     codec_type: Option<String>,
     codec_name: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
     avg_frame_rate: Option<String>,
+    channels: Option<u32>,
     r_frame_rate: Option<String>,
     duration: Option<String>,
+    tags: Option<HashMap<String, String>>,
+    disposition: Option<FfDisposition>,
+}
+
+#[derive(Deserialize, Default)]
+struct FfDisposition {
+    #[serde(default)]
+    default: u8,
+    #[serde(default)]
+    forced: u8,
+    #[serde(default)]
+    hearing_impaired: u8,
+    #[serde(default)]
+    visual_impaired: u8,
 }
 
 fn parse_rate(rate: &Option<String>) -> Option<f64> {
@@ -63,7 +99,13 @@ pub async fn probe_video(path: String) -> Result<VideoInfo, String> {
 pub fn probe_sync(path: &str) -> Result<VideoInfo, String> {
     let out = std::process::Command::new(media::ffprobe_path())
         .args([
-            "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path,
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+            path,
         ])
         .output()
         .map_err(|e| format!("failed to run ffprobe: {e}"))?;
@@ -85,6 +127,42 @@ pub fn probe_sync(path: &str) -> Result<VideoInfo, String> {
         .streams
         .iter()
         .filter(|s| s.codec_type.as_deref() == Some("audio"))
+        .collect();
+    let tracks = parsed
+        .streams
+        .iter()
+        .filter_map(|stream| {
+            let kind = stream.codec_type.as_deref()?;
+            if kind != "audio" && kind != "subtitle" {
+                return None;
+            }
+            let codec = stream.codec_name.clone().unwrap_or_default();
+            let tags = stream.tags.as_ref();
+            let disposition = stream.disposition.as_ref();
+            let text_subtitle = matches!(
+                codec.as_str(),
+                "subrip" | "srt" | "ass" | "ssa" | "webvtt" | "mov_text" | "text"
+            );
+            Some(MediaTrack {
+                stream_index: stream.index.unwrap_or(0),
+                kind: kind.to_string(),
+                codec,
+                language: tags
+                    .and_then(|t| t.get("language").or_else(|| t.get("LANGUAGE")))
+                    .cloned(),
+                title: tags
+                    .and_then(|t| t.get("title").or_else(|| t.get("TITLE")))
+                    .cloned(),
+                is_default: disposition.map(|d| d.default != 0).unwrap_or(false),
+                is_forced: disposition.map(|d| d.forced != 0).unwrap_or(false),
+                is_hearing_impaired: disposition
+                    .map(|d| d.hearing_impaired != 0)
+                    .unwrap_or(false),
+                is_visual_impaired: disposition.map(|d| d.visual_impaired != 0).unwrap_or(false),
+                is_text: kind == "subtitle" && text_subtitle,
+                channels: stream.channels.unwrap_or(0),
+            })
+        })
         .collect();
 
     let duration = parsed
@@ -122,7 +200,21 @@ pub fn probe_sync(path: &str) -> Result<VideoInfo, String> {
             .and_then(|a| a.codec_name.clone())
             .unwrap_or_default(),
         audio_tracks: audios.len() as u32,
+        tracks,
     })
+}
+
+pub fn preferred_audio_stream(info: &VideoInfo) -> Option<u32> {
+    info.tracks
+        .iter()
+        .find(|track| track.kind == "audio" && track.is_default && !track.is_visual_impaired)
+        .or_else(|| {
+            info.tracks
+                .iter()
+                .find(|track| track.kind == "audio" && !track.is_visual_impaired)
+        })
+        .or_else(|| info.tracks.iter().find(|track| track.kind == "audio"))
+        .map(|track| track.stream_index)
 }
 
 /// All video keyframe timestamps, used to snap lossless cut points.
@@ -137,10 +229,14 @@ pub async fn get_keyframes(app: tauri::AppHandle, path: String) -> Result<Vec<f6
         }
         let out = std::process::Command::new(media::ffprobe_path())
             .args([
-                "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "packet=pts_time,flags",
-                "-of", "csv=p=0",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "packet=pts_time,flags",
+                "-of",
+                "csv=p=0",
                 &path,
             ])
             .output()

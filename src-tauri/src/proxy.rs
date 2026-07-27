@@ -1,4 +1,4 @@
-use crate::media;
+use crate::{media, probe};
 use tauri::Emitter;
 
 /// Generates a low-res H.264/AAC preview the webview can always play,
@@ -14,19 +14,23 @@ pub async fn generate_proxy(
     tauri::async_runtime::spawn_blocking(move || {
         let dir = media::cache_dir_for(&app, &path)?;
         let _guard = media::JobGuard::acquire(format!("proxy:{}", dir.display()))?;
-        let proxy = dir.join("proxy.mp4");
+        let proxy = dir.join("proxy-v2.mp4");
         if proxy.exists() {
             return Ok(proxy.to_string_lossy().to_string());
         }
         // clear tmp files orphaned by a previous crash or force-quit
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten() {
-                if entry.file_name().to_string_lossy().starts_with("proxy.tmp") {
+                if entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("proxy-v2.tmp")
+                {
                     let _ = std::fs::remove_file(entry.path());
                 }
             }
         }
-        let tmp = dir.join(format!("proxy.tmp.{}.mp4", std::process::id()));
+        let tmp = dir.join(format!("proxy-v2.tmp.{}.mp4", std::process::id()));
 
         let target_height = source_height.min(540);
         // force even dimensions for h264
@@ -35,15 +39,41 @@ pub async fn generate_proxy(
         let tmp_str = tmp.to_string_lossy().to_string();
 
         let ffmpeg = media::ffmpeg_path();
+        let info = probe::probe_sync(&path)?;
+        let audio_map = probe::preferred_audio_stream(&info)
+            .map(|index| format!("0:{index}?"))
+            .unwrap_or_else(|| "0:a:0?".into());
         let args = [
-            "-y", "-v", "error", "-nostats", "-progress", "pipe:1",
-            "-hwaccel", "videotoolbox",
-            "-i", &path,
-            "-map", "0:v:0", "-map", "0:a:0?",
-            "-vf", &scale,
-            "-c:v", "h264_videotoolbox", "-b:v", "2000k", "-allow_sw", "1",
-            "-c:a", "aac", "-b:a", "128k", "-ac", "2",
-            "-movflags", "+faststart",
+            "-y",
+            "-v",
+            "error",
+            "-nostats",
+            "-progress",
+            "pipe:1",
+            "-hwaccel",
+            "videotoolbox",
+            "-i",
+            &path,
+            "-map",
+            "0:v:0",
+            "-map",
+            &audio_map,
+            "-vf",
+            &scale,
+            "-c:v",
+            "h264_videotoolbox",
+            "-b:v",
+            "2000k",
+            "-allow_sw",
+            "1",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-ac",
+            "2",
+            "-movflags",
+            "+faststart",
             &tmp_str,
         ];
         let mut child = media::spawn(&ffmpeg, &args)?;
@@ -52,13 +82,20 @@ pub async fn generate_proxy(
         if let Some(stdout) = child.stdout.take() {
             let reader = std::io::BufReader::new(stdout);
             media::read_progress(reader, |t| {
-                let pct = if duration > 0.0 { (t / duration * 100.0).min(100.0) } else { 0.0 };
+                let pct = if duration > 0.0 {
+                    (t / duration * 100.0).min(100.0)
+                } else {
+                    0.0
+                };
                 let _ = app.emit("proxy-progress", serde_json::json!({ "t": t, "pct": pct }));
             });
         }
         media::wait_checked(child, "proxy generation", stderr_drain)?;
         std::fs::rename(&tmp, &proxy).map_err(|e| e.to_string())?;
-        let _ = app.emit("proxy-progress", serde_json::json!({ "t": duration, "pct": 100.0 }));
+        let _ = app.emit(
+            "proxy-progress",
+            serde_json::json!({ "t": duration, "pct": 100.0 }),
+        );
         Ok(proxy.to_string_lossy().to_string())
     })
     .await

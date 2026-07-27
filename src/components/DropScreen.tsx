@@ -59,9 +59,9 @@ export default function DropScreen() {
           <span className="text-flare">minus the jump scares.</span>
         </h1>
         <p className="mx-auto mt-5 max-w-md text-center text-[15px] leading-relaxed text-dust">
-          Drop a movie in. Videofy listens for sudden loudness — the signature
-          of a scare — so you can cut those moments and export a copy with the
-          original picture untouched.
+          Drop a movie in. Videofy checks captions, dialogue, sound events,
+          scene changes, and optional human guides so you can review and remove
+          unsuitable moments quickly.
         </p>
 
         {!importing ? (
@@ -86,9 +86,9 @@ export default function DropScreen() {
             )}
             <div className="mt-10 flex justify-center gap-10 text-center">
               {[
-                ["Listen", "finds sudden-loudness spikes"],
-                ["Review", "keep or cut each moment"],
-                ["Export", "same quality, same size"],
+                ["Scan", "text, sound, picture, guides"],
+                ["Review", "cut, mute, or keep each clue"],
+                ["Export", "clean copy for movie night"],
               ].map(([title, sub]) => (
                 <div key={title} className="w-40">
                   <p className="font-display text-sm font-semibold text-glow">{title}</p>
@@ -108,7 +108,7 @@ export default function DropScreen() {
               </p>
             )}
             <div className="mt-6 space-y-4">
-              <ProgressRow label="Listening for scares" pct={analysisPct} />
+              <ProgressRow label="Preparing audio baseline" pct={analysisPct} />
               <ProgressRow label="Tracing the waveform" pct={waveformPct} />
               <ProgressRow label="Building preview" pct={proxyPct} />
             </div>

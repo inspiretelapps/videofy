@@ -1,4 +1,4 @@
-import { useStore, deriveCuts } from "../store";
+import { useStore, deriveEdits } from "../store";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { fmtBytes, fmtTime } from "../lib/format";
 import Player from "./Player";
@@ -12,15 +12,14 @@ export default function Editor() {
   const info = useStore((s) => s.info);
   const reset = useStore((s) => s.reset);
   const exportMovie = useStore((s) => s.exportMovie);
-  const cutCount = useStore(
-    (s) =>
-      deriveCuts({
-        analysis: s.analysis,
-        candidateStatus: s.candidateStatus,
-        manualCuts: s.manualCuts,
-        showDetections: s.showDetections,
-      }).length,
-  );
+  const editCount = useStore((state) => {
+    const edits = deriveEdits({
+      events: state.events,
+      eventStatus: state.eventStatus,
+      manualCuts: state.manualCuts,
+    });
+    return edits.cuts.length + edits.mutes.length;
+  });
 
   if (!info) return null;
 
@@ -48,7 +47,7 @@ export default function Editor() {
           onClick={() => void exportMovie()}
           className="rounded-md bg-glow px-4 py-1.5 text-sm font-semibold text-well transition-colors hover:bg-white"
         >
-          Export clean copy{cutCount > 0 ? ` (${cutCount})` : ""}
+          Export clean copy{editCount > 0 ? ` (${editCount})` : ""}
         </button>
       </header>
 

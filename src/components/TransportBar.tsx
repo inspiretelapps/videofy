@@ -49,7 +49,7 @@ export default function TransportBar() {
         <Hint k="J K L">shuttle</Hint>
         <Hint k="I / O">mark cut</Hint>
         <Hint k="⏎">cut selected</Hint>
-        <Hint k="[ ]">prev / next cut</Hint>
+        <Hint k="[ ]">prev / next clue</Hint>
         <Hint k="scroll">zoom</Hint>
       </div>
     </div>

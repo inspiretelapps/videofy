@@ -1,37 +1,71 @@
 import { create } from "zustand";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   AnalysisResult,
-  CandidateStatus,
-  Cut,
+  AudioEventResult,
+  ContentCategory,
+  ContentEvent,
+  EditRange,
+  EventStatus,
   ExportResult,
+  GuideResult,
   ManualCut,
+  ProfanityTier,
+  ScanState,
+  SceneAnalysisResult,
   Selection,
+  TextAnalysisResult,
   VideoInfo,
   WaveformData,
   WaveformLevels,
 } from "./types";
 
 export type Stage = "welcome" | "importing" | "editor";
-
 export type Sensitivity = "strict" | "balanced" | "sensitive";
+export type SortBy = "time" | "severity" | "confidence";
+export type MinSeverity = 1 | 2 | 3;
+
 const SENSITIVITY_VALUE: Record<Sensitivity, number> = {
   strict: 0.25,
   balanced: 0.5,
   sensitive: 0.8,
 };
 
-export type SortBy = "time" | "intensity";
-/** Minimum score a candidate needs to stay visible in the panel. */
-export type MinIntensity = 0 | 40 | 70;
+/// Source keys produced by the text pass — see `Cue.source` in
+/// `text_analysis.rs`. Used to replace, rather than merge, text results when
+/// the profanity tier changes.
+const TEXT_SOURCE_KEYS = ["subtitle", "audio-description", "transcript"];
+
+export const ALL_CATEGORIES: ContentCategory[] = [
+  "frightening",
+  "violence",
+  "sexual",
+  "nudity",
+  "language",
+  "substances",
+  "bullying",
+  "disturbing",
+];
 
 interface ExportState {
   running: boolean;
   pct: number;
   result: ExportResult | null;
   error: string | null;
+}
+
+interface SavedProject {
+  eventStatus: Record<string, EventStatus>;
+  manualCuts: ManualCut[];
+  nextManualId: number;
+  userEvents: ContentEvent[];
+}
+
+interface Settings {
+  dddApiKey: string;
+  profanityTier: ProfanityTier;
 }
 
 interface State {
@@ -41,6 +75,9 @@ interface State {
   proxyUrl: string | null;
   keyframes: number[];
   analysis: AnalysisResult | null;
+  rawEvents: ContentEvent[];
+  events: ContentEvent[];
+  userEvents: ContentEvent[];
   analysisError: string | null;
   analyzing: boolean;
   sensitivity: Sensitivity;
@@ -49,53 +86,82 @@ interface State {
   proxyPct: number;
   analysisPct: number;
   waveformPct: number;
+  scans: {
+    text: ScanState;
+    audio: ScanState;
+    vision: ScanState;
+    guide: ScanState;
+  };
 
-  candidateStatus: Record<number, CandidateStatus>;
+  eventStatus: Record<string, EventStatus>;
   manualCuts: ManualCut[];
   nextManualId: number;
   selection: Selection | null;
   pendingIn: number | null;
   sortBy: SortBy;
-  minIntensity: MinIntensity;
-  checkedIds: number[];
-  /** When false, detections vanish everywhere and are excluded from export. */
+  minSeverity: MinSeverity;
+  categories: ContentCategory[];
+  checkedIds: string[];
   showDetections: boolean;
 
   playhead: number;
-  /**
-   * Shuttle rate: 0 = paused, 1 = normal play, 2/4/8 = fast forward,
-   * negative = reverse (stepped seeks — HTML5 video can't play backward).
-   */
   shuttle: number;
   seekReq: { t: number; n: number };
   view: { t0: number; t1: number };
-
   exporting: ExportState | null;
 
+  settings: Settings;
+  guideTitle: string;
+  guideYear: number | null;
+  guideOffset: number;
+
   openFile: (path: string) => Promise<void>;
+  runDeepScan: () => Promise<void>;
   reset: () => void;
   setPlayhead: (t: number) => void;
   seekTo: (t: number) => void;
   setShuttle: (rate: number) => void;
   setView: (t0: number, t1: number) => void;
   zoomToRange: (start: number, end: number) => void;
-  select: (sel: Selection | null) => void;
-  setCandidateStatus: (id: number, status: CandidateStatus) => void;
-  bulkSetStatus: (ids: number[], status: CandidateStatus) => void;
-  setSortBy: (s: SortBy) => void;
-  setMinIntensity: (m: MinIntensity) => void;
-  toggleChecked: (id: number) => void;
+  select: (selection: Selection | null) => void;
+  setEventStatus: (id: string, status: EventStatus) => void;
+  bulkSetStatus: (ids: string[], status: EventStatus) => void;
+  setSortBy: (sort: SortBy) => void;
+  setMinSeverity: (severity: MinSeverity) => void;
+  toggleCategory: (category: ContentCategory) => void;
+  toggleChecked: (id: string) => void;
   clearChecked: () => void;
   toggleDetections: () => void;
-  setPendingIn: (t: number | null) => void;
-  commitOut: (t: number) => void;
+  setPendingIn: (time: number | null) => void;
+  commitOut: (time: number) => void;
   removeManualCut: (id: number) => void;
-  changeSensitivity: (s: Sensitivity) => Promise<void>;
+  changeSensitivity: (sensitivity: Sensitivity) => Promise<void>;
+  importTimingFile: () => Promise<void>;
+  lookupGuide: () => Promise<void>;
+  setGuideIdentity: (title: string, year: number | null) => void;
+  setGuideOffset: (offset: number) => void;
+  updateSettings: (settings: Partial<Settings>) => void;
+  rescanText: () => Promise<void>;
   exportMovie: () => Promise<void>;
   dismissExport: () => void;
 }
 
+const idleScan = (detail: string): ScanState => ({
+  running: false,
+  pct: 0,
+  detail,
+  warnings: [],
+  error: null,
+});
+
 let listenersAttached = false;
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+const savedSettings = readJson<Partial<Settings>>("videofy.settings");
+const storedSettings: Settings = {
+  dddApiKey: savedSettings?.dddApiKey ?? "",
+  profanityTier: savedSettings?.profanityTier ?? "medium",
+};
 
 export const useStore = create<State>()((set, get) => ({
   stage: "welcome",
@@ -104,6 +170,9 @@ export const useStore = create<State>()((set, get) => ({
   proxyUrl: null,
   keyframes: [],
   analysis: null,
+  rawEvents: [],
+  events: [],
+  userEvents: [],
   analysisError: null,
   analyzing: false,
   sensitivity: "balanced",
@@ -111,13 +180,20 @@ export const useStore = create<State>()((set, get) => ({
   proxyPct: 0,
   analysisPct: 0,
   waveformPct: 0,
-  candidateStatus: {},
+  scans: {
+    text: idleScan("Waiting"),
+    audio: idleScan("Waiting"),
+    vision: idleScan("Waiting"),
+    guide: idleScan("Optional"),
+  },
+  eventStatus: {},
   manualCuts: [],
   nextManualId: 1,
   selection: null,
   pendingIn: null,
   sortBy: "time",
-  minIntensity: 0,
+  minSeverity: 1,
+  categories: [...ALL_CATEGORIES],
   checkedIds: [],
   showDetections: true,
   playhead: 0,
@@ -125,71 +201,85 @@ export const useStore = create<State>()((set, get) => ({
   seekReq: { t: 0, n: 0 },
   view: { t0: 0, t1: 1 },
   exporting: null,
+  settings: storedSettings,
+  guideTitle: "",
+  guideYear: null,
+  guideOffset: 0,
 
-  openFile: async (path: string) => {
-    // guards against double-fired drop events racing two imports
+  openFile: async (path) => {
     if (get().stage === "importing") return;
-    if (!listenersAttached) {
-      listenersAttached = true;
-      void listen<{ pct: number }>("proxy-progress", (e) =>
-        set({ proxyPct: e.payload.pct }),
-      );
-      void listen<{ pct: number }>("analysis-progress", (e) =>
-        set({ analysisPct: e.payload.pct }),
-      );
-      void listen<{ pct: number }>("waveform-progress", (e) =>
-        set({ waveformPct: e.payload.pct }),
-      );
-      void listen<{ pct: number }>("export-progress", (e) => {
-        const ex = get().exporting;
-        if (ex?.running) set({ exporting: { ...ex, pct: e.payload.pct } });
-      });
-    }
+    attachListeners(set, get);
     set({
       stage: "importing",
       importError: null,
       proxyPct: 0,
       analysisPct: 0,
       waveformPct: 0,
+      rawEvents: [],
+      events: [],
+      userEvents: [],
+      eventStatus: {},
+      manualCuts: [],
+      scans: {
+        text: idleScan("Waiting"),
+        audio: idleScan("Waiting"),
+        vision: idleScan("Waiting"),
+        guide: idleScan("Optional"),
+      },
     });
     try {
       const info = await invoke<VideoInfo>("probe_video", { path });
-      set({ info });
+      const identity = inferMovieIdentity(info.fileName);
+      const saved = loadProject(info);
+      set({
+        info,
+        guideTitle: identity.title,
+        guideYear: identity.year,
+        eventStatus: saved?.eventStatus ?? {},
+        manualCuts: saved?.manualCuts ?? [],
+        nextManualId: saved?.nextManualId ?? 1,
+        userEvents: saved?.userEvents ?? [],
+      });
       const proxyP = invoke<string>("generate_proxy", {
         path,
         duration: info.duration,
         sourceHeight: info.height,
       });
-      const kfP = invoke<number[]>("get_keyframes", { path });
-      const anaP = invoke<AnalysisResult>("analyze_audio", {
+      const keyframesP = invoke<number[]>("get_keyframes", { path });
+      const loudnessP = invoke<AnalysisResult>("analyze_audio", {
         path,
         duration: info.duration,
         sensitivity: SENSITIVITY_VALUE[get().sensitivity],
-      }).catch((e) => {
-        set({ analysisError: String(e) });
+      }).catch((error) => {
+        set({ analysisError: String(error) });
         return null;
       });
-      // waveform is display-only; a failure shouldn't block the import
-      const waveP = invoke<WaveformData>("get_waveform", {
+      const waveformP = invoke<WaveformData>("get_waveform", {
         path,
         duration: info.duration,
       }).catch(() => null);
       const [proxyPath, keyframes, analysis, waveformData] = await Promise.all([
         proxyP,
-        kfP,
-        anaP,
-        waveP,
+        keyframesP,
+        loudnessP,
+        waveformP,
       ]);
-      const statuses: Record<number, CandidateStatus> = {};
-      for (const c of analysis?.candidates ?? []) statuses[c.id] = "pending";
+      const rawEvents = dedupeById([
+        ...(analysis?.events ?? []),
+        ...(saved?.userEvents ?? []),
+      ]);
+      const events = fuseEvents(rawEvents);
+      const statuses = { ...(saved?.eventStatus ?? {}) };
+      for (const event of events) statuses[event.id] ??= "pending";
       set({
         stage: "editor",
         proxyUrl: convertFileSrc(proxyPath),
         keyframes,
         analysis,
+        rawEvents,
+        events,
         waveform: waveformData ? buildWaveformLevels(waveformData) : null,
-        candidateStatus: statuses,
-        manualCuts: [],
+        eventStatus: statuses,
         selection: null,
         pendingIn: null,
         checkedIds: [],
@@ -197,8 +287,121 @@ export const useStore = create<State>()((set, get) => ({
         shuttle: 0,
         view: { t0: 0, t1: info.duration },
       });
-    } catch (e) {
-      set({ stage: "welcome", importError: String(e), info: null });
+      void get().runDeepScan();
+    } catch (error) {
+      set({ stage: "welcome", importError: String(error), info: null });
+    }
+  },
+
+  runDeepScan: async () => {
+    const { info } = get();
+    if (!info) return;
+    set((state) => ({
+      scans: {
+        ...state.scans,
+        text: idleScan("Queued"),
+        audio: idleScan("Queued"),
+        vision: idleScan("Queued"),
+      },
+    }));
+
+    const begin = (key: "text" | "audio" | "vision", detail: string) =>
+      set((state) => ({
+        scans: { ...state.scans, [key]: { ...idleScan(detail), running: true } },
+      }));
+
+    const addResult = (
+      key: "text" | "audio" | "vision",
+      result: { events: ContentEvent[]; warnings: string[] },
+      detail: string,
+    ) => {
+      const current = get();
+      if (current.info?.path !== info.path) return;
+      const rawEvents = dedupeById([...current.rawEvents, ...result.events]);
+      const events = fuseEvents(rawEvents);
+      const statuses = carryEventStatuses(
+        current.events,
+        events,
+        current.eventStatus,
+      );
+      set((state) => ({
+        rawEvents,
+        events,
+        eventStatus: statuses,
+        scans: {
+          ...state.scans,
+          [key]: {
+            running: false,
+            pct: 100,
+            detail,
+            warnings: result.warnings,
+            error: null,
+          },
+        },
+      }));
+      scheduleProjectSave(get);
+    };
+    const fail = (key: "text" | "audio" | "vision", error: unknown) => {
+      if (get().info?.path !== info.path) return;
+      set((state) => ({
+        scans: {
+          ...state.scans,
+          [key]: {
+            running: false,
+            pct: 0,
+            detail: "Unavailable",
+            warnings: [],
+            error: String(error),
+          },
+        },
+      }));
+    };
+
+    // One pass at a time. Run concurrently these are three simultaneous
+    // full-file decodes — Whisper, ONNX inference and JPEG frame extraction —
+    // competing for memory and disk bandwidth on a 16 GB machine, which made
+    // all three slower and risked swapping. Sequential is faster in practice
+    // and keeps the machine usable while a movie is scanning.
+    const stillCurrent = () => get().info?.path === info.path;
+
+    try {
+      begin("text", "Reading subtitles and dialogue");
+      const result = await invoke<TextAnalysisResult>("analyze_text", {
+        path: info.path,
+        duration: info.duration,
+        profanityTier: get().settings.profanityTier,
+      });
+      addResult("text", result, `${result.cueCount} timed cues from ${result.source}`);
+    } catch (error) {
+      fail("text", error);
+    }
+    if (!stillCurrent()) return;
+
+    try {
+      begin("audio", "Classifying sound events");
+      const result = await invoke<AudioEventResult>("analyze_audio_events", {
+        path: info.path,
+        duration: info.duration,
+      });
+      addResult("audio", result, `${result.events.length} semantic sound clues`);
+    } catch (error) {
+      fail("audio", error);
+    }
+    if (!stillCurrent()) return;
+
+    try {
+      begin("vision", "Scanning scene changes");
+      const result = await invoke<SceneAnalysisResult>("analyze_scenes", {
+        path: info.path,
+        duration: info.duration,
+      });
+      addResult(
+        "vision",
+        result,
+        `${result.framesScanned || "cached"} scene frames · ${result.verifier}`,
+      );
+    } catch (error) {
+      fail("vision", error);
     }
   },
 
@@ -209,9 +412,12 @@ export const useStore = create<State>()((set, get) => ({
       proxyUrl: null,
       keyframes: [],
       analysis: null,
+      rawEvents: [],
+      events: [],
+      userEvents: [],
       analysisError: null,
       waveform: null,
-      candidateStatus: {},
+      eventStatus: {},
       manualCuts: [],
       selection: null,
       pendingIn: null,
@@ -219,121 +425,291 @@ export const useStore = create<State>()((set, get) => ({
       exporting: null,
     }),
 
-  setPlayhead: (t) => set({ playhead: t }),
-  seekTo: (t) => {
-    const d = get().info?.duration ?? 0;
-    const clamped = Math.min(Math.max(0, t), d);
+  setPlayhead: (time) => set({ playhead: time }),
+  seekTo: (time) => {
+    const duration = get().info?.duration ?? 0;
+    const clamped = Math.min(Math.max(0, time), duration);
     set({ playhead: clamped, seekReq: { t: clamped, n: get().seekReq.n + 1 } });
   },
   setShuttle: (rate) => set({ shuttle: rate }),
   setView: (t0, t1) => set({ view: { t0, t1 } }),
-
   zoomToRange: (start, end) => {
-    const d = get().info?.duration ?? 1;
+    const duration = get().info?.duration ?? 1;
     const span = Math.max(end - start, 6);
     const pad = span * 0.8;
     set({
       view: {
         t0: Math.max(0, start - pad),
-        t1: Math.min(d, end + pad),
+        t1: Math.min(duration, end + pad),
       },
     });
   },
+  select: (selection) => set({ selection }),
 
-  select: (sel) => set({ selection: sel }),
-
-  setCandidateStatus: (id, status) =>
-    set({ candidateStatus: { ...get().candidateStatus, [id]: status } }),
-
-  bulkSetStatus: (ids, status) => {
-    const statuses = { ...get().candidateStatus };
-    for (const id of ids) statuses[id] = status;
-    set({ candidateStatus: statuses, checkedIds: [] });
+  setEventStatus: (id, status) => {
+    set({ eventStatus: { ...get().eventStatus, [id]: status } });
+    scheduleProjectSave(get);
   },
-
+  bulkSetStatus: (ids, status) => {
+    const statuses = { ...get().eventStatus };
+    for (const id of ids) statuses[id] = status;
+    set({ eventStatus: statuses, checkedIds: [] });
+    scheduleProjectSave(get);
+  },
   setSortBy: (sortBy) => set({ sortBy }),
-  setMinIntensity: (minIntensity) => set({ minIntensity }),
-
+  setMinSeverity: (minSeverity) => set({ minSeverity }),
+  toggleCategory: (category) => {
+    const categories = get().categories;
+    set({
+      categories: categories.includes(category)
+        ? categories.filter((value) => value !== category)
+        : [...categories, category],
+    });
+  },
   toggleChecked: (id) => {
     const checked = get().checkedIds;
     set({
       checkedIds: checked.includes(id)
-        ? checked.filter((c) => c !== id)
+        ? checked.filter((value) => value !== id)
         : [...checked, id],
     });
   },
   clearChecked: () => set({ checkedIds: [] }),
-
   toggleDetections: () => {
     const showing = get().showDetections;
     set({
       showDetections: !showing,
-      // a hidden candidate can't stay selected
-      selection:
-        showing && get().selection?.kind === "candidate" ? null : get().selection,
+      selection: showing && get().selection?.kind === "event" ? null : get().selection,
     });
   },
-
-  setPendingIn: (t) => set({ pendingIn: t }),
-
-  commitOut: (t) => {
+  setPendingIn: (time) => set({ pendingIn: time }),
+  commitOut: (time) => {
     const { pendingIn, manualCuts, nextManualId } = get();
-    if (pendingIn === null || t <= pendingIn + 0.05) return;
-    const cut: ManualCut = { id: nextManualId, start: pendingIn, end: t };
+    if (pendingIn === null || time <= pendingIn + 0.05) return;
+    const cut: ManualCut = { id: nextManualId, start: pendingIn, end: time };
     set({
       manualCuts: [...manualCuts, cut].sort((a, b) => a.start - b.start),
       nextManualId: nextManualId + 1,
       pendingIn: null,
       selection: { kind: "manual", id: cut.id },
     });
+    scheduleProjectSave(get);
   },
-
   removeManualCut: (id) => {
     set({
-      manualCuts: get().manualCuts.filter((c) => c.id !== id),
+      manualCuts: get().manualCuts.filter((cut) => cut.id !== id),
       selection:
         get().selection?.kind === "manual" && get().selection?.id === id
           ? null
           : get().selection,
     });
+    scheduleProjectSave(get);
   },
 
-  changeSensitivity: async (s) => {
+  changeSensitivity: async (sensitivity) => {
     const { info } = get();
     if (!info) return;
-    set({ sensitivity: s, analyzing: true });
+    set({ sensitivity, analyzing: true });
     try {
       const analysis = await invoke<AnalysisResult>("analyze_audio", {
         path: info.path,
         duration: info.duration,
-        sensitivity: SENSITIVITY_VALUE[s],
+        sensitivity: SENSITIVITY_VALUE[sensitivity],
       });
-      const statuses: Record<number, CandidateStatus> = {};
-      for (const c of analysis.candidates) statuses[c.id] = "pending";
+      const current = get();
+      if (current.info?.path !== info.path) return;
+      const rawEvents = dedupeById([
+        ...current.rawEvents.filter((event) => event.sourceKey !== "loudness"),
+        ...analysis.events,
+      ]);
+      const events = fuseEvents(rawEvents);
+      const statuses = carryEventStatuses(
+        current.events,
+        events,
+        current.eventStatus,
+      );
       set({
         analysis,
-        candidateStatus: statuses,
-        selection: null,
-        checkedIds: [],
+        rawEvents,
+        events,
+        eventStatus: statuses,
         analysisError: null,
       });
-    } catch (e) {
-      set({ analysisError: String(e) });
+    } catch (error) {
+      set({ analysisError: String(error) });
     } finally {
       set({ analyzing: false });
+    }
+  },
+
+  importTimingFile: async () => {
+    const path = await open({
+      multiple: false,
+      filters: [{ name: "Timing files", extensions: ["srt", "vtt", "skp"] }],
+    });
+    if (typeof path !== "string") return;
+    set((state) => ({
+      scans: {
+        ...state.scans,
+        guide: { ...idleScan("Importing timestamps"), running: true },
+      },
+    }));
+    try {
+      const result = await invoke<GuideResult>("import_timing_file", {
+        path,
+        offset: get().guideOffset,
+      });
+      const aligned =
+        get().guideOffset === 0
+          ? autoAlignImportedEvents(result.events, get().rawEvents)
+          : { events: result.events, offset: 0 };
+      addUserEvents(set, get, aligned.events);
+      set((state) => ({
+        scans: {
+          ...state.scans,
+          guide: {
+            running: false,
+            pct: 100,
+            detail: `${aligned.events.length} events from ${result.provider}${
+              aligned.offset !== 0
+                ? ` · auto-synced ${aligned.offset > 0 ? "+" : ""}${aligned.offset.toFixed(1)}s`
+                : ""
+            }`,
+            warnings: result.warnings,
+            error: null,
+          },
+        },
+      }));
+    } catch (error) {
+      set((state) => ({
+        scans: {
+          ...state.scans,
+          guide: { ...idleScan("Import failed"), error: String(error) },
+        },
+      }));
+    }
+  },
+
+  lookupGuide: async () => {
+    const { settings, guideTitle, guideYear } = get();
+    set((state) => ({
+      scans: {
+        ...state.scans,
+        guide: { ...idleScan("Looking up title"), running: true },
+      },
+    }));
+    try {
+      const result = await invoke<GuideResult>("lookup_content_guide", {
+        apiKey: settings.dddApiKey,
+        title: guideTitle,
+        year: guideYear,
+      });
+      addUserEvents(set, get, result.events);
+      set((state) => ({
+        scans: {
+          ...state.scans,
+          guide: {
+            running: false,
+            pct: 100,
+            detail: `${result.events.length} timestamped events from ${result.provider}`,
+            warnings: result.warnings,
+            error: null,
+          },
+        },
+      }));
+    } catch (error) {
+      set((state) => ({
+        scans: {
+          ...state.scans,
+          guide: { ...idleScan("Guide unavailable"), error: String(error) },
+        },
+      }));
+    }
+  },
+  setGuideIdentity: (guideTitle, guideYear) => set({ guideTitle, guideYear }),
+  setGuideOffset: (guideOffset) => set({ guideOffset }),
+  updateSettings: (partial) => {
+    const previous = get().settings;
+    const settings = { ...previous, ...partial };
+    set({ settings });
+    localStorage.setItem("videofy.settings", JSON.stringify(settings));
+    // Transcripts and subtitles are cached, so re-running the text pass after a
+    // tier change is cheap — it only re-derives which words become mutes.
+    if (
+      settings.profanityTier !== previous.profanityTier &&
+      get().stage === "editor"
+    ) {
+      void get().rescanText();
+    }
+  },
+
+  rescanText: async () => {
+    const { info, settings } = get();
+    if (!info || get().scans.text.running) return;
+    set((state) => ({
+      scans: {
+        ...state.scans,
+        text: { ...idleScan("Re-reading dialogue"), running: true },
+      },
+    }));
+    try {
+      const result = await invoke<TextAnalysisResult>("analyze_text", {
+        path: info.path,
+        duration: info.duration,
+        profanityTier: settings.profanityTier,
+      });
+      if (get().info?.path !== info.path) return;
+      // Replace the previous text events rather than merging, or the old
+      // tier's mutes would survive alongside the new ones.
+      const current = get();
+      const rawEvents = dedupeById([
+        ...current.rawEvents.filter(
+          (event) => !TEXT_SOURCE_KEYS.includes(event.sourceKey),
+        ),
+        ...result.events,
+      ]);
+      const events = fuseEvents(rawEvents);
+      const statuses = carryEventStatuses(
+        current.events,
+        events,
+        current.eventStatus,
+      );
+      set((state) => ({
+        rawEvents,
+        events,
+        eventStatus: statuses,
+        scans: {
+          ...state.scans,
+          text: {
+            running: false,
+            pct: 100,
+            detail: `${result.cueCount} timed cues from ${result.source}`,
+            warnings: result.warnings,
+            error: null,
+          },
+        },
+      }));
+      scheduleProjectSave(get);
+    } catch (error) {
+      set((state) => ({
+        scans: {
+          ...state.scans,
+          text: { ...idleScan("Unavailable"), error: String(error) },
+        },
+      }));
     }
   },
 
   exportMovie: async () => {
     const { info, keyframes } = get();
     if (!info || get().exporting?.running) return;
-    const cuts = deriveCuts(get());
+    const { cuts, mutes } = deriveEdits(get());
     const dot = info.fileName.lastIndexOf(".");
     const stem = dot > 0 ? info.fileName.slice(0, dot) : info.fileName;
-    const ext = dot > 0 ? info.fileName.slice(dot + 1) : "mp4";
+    const extension = dot > 0 ? info.fileName.slice(dot + 1) : "mp4";
     const outPath = await save({
-      defaultPath: `${stem} (clean).${ext}`,
-      filters: [{ name: "Video", extensions: [ext] }],
+      defaultPath: `${stem} (clean).${extension}`,
+      filters: [{ name: "Video", extensions: [extension] }],
     });
     if (!outPath) return;
     set({ exporting: { running: true, pct: 0, result: null, error: null } });
@@ -342,31 +718,86 @@ export const useStore = create<State>()((set, get) => ({
         path: info.path,
         outPath,
         cuts,
+        mutes,
         keyframes,
         duration: info.duration,
       });
       set({ exporting: { running: false, pct: 100, result, error: null } });
-    } catch (e) {
-      set({ exporting: { running: false, pct: 0, result: null, error: String(e) } });
+    } catch (error) {
+      set({
+        exporting: { running: false, pct: 0, result: null, error: String(error) },
+      });
     }
   },
-
   dismissExport: () => set({ exporting: null }),
 }));
 
-/**
- * Max-pool the peak buckets into a pyramid of coarser levels (×4 each) so the
- * timeline can pick a level with only a few buckets per pixel at any zoom.
- */
+function attachListeners(
+  set: (partial: Partial<State> | ((state: State) => Partial<State>)) => void,
+  get: () => State,
+) {
+  if (listenersAttached) return;
+  listenersAttached = true;
+  void listen<{ pct: number }>("proxy-progress", (event) =>
+    set({ proxyPct: event.payload.pct }),
+  );
+  void listen<{ pct: number }>("analysis-progress", (event) =>
+    set({ analysisPct: event.payload.pct }),
+  );
+  void listen<{ pct: number }>("waveform-progress", (event) =>
+    set({ waveformPct: event.payload.pct }),
+  );
+  const scanProgress = (
+    eventName: string,
+    key: "text" | "audio" | "vision",
+  ) =>
+    listen<{ pct: number }>(eventName, (event) =>
+      set((state) => ({
+        scans: {
+          ...state.scans,
+          [key]: { ...state.scans[key], pct: event.payload.pct },
+        },
+      })),
+    );
+  void scanProgress("text-analysis-progress", "text");
+  void scanProgress("whisper-model-download", "text");
+  void scanProgress("audio-events-progress", "audio");
+  void scanProgress("audio-model-download", "audio");
+  void scanProgress("scene-analysis-progress", "vision");
+  void listen<{ pct: number }>("export-progress", (event) => {
+    const exporting = get().exporting;
+    if (exporting?.running)
+      set({ exporting: { ...exporting, pct: event.payload.pct } });
+  });
+}
+
+function addUserEvents(
+  set: (partial: Partial<State> | ((state: State) => Partial<State>)) => void,
+  get: () => State,
+  incoming: ContentEvent[],
+) {
+  const current = get();
+  const userEvents = dedupeById([...current.userEvents, ...incoming]);
+  const rawEvents = dedupeById([...current.rawEvents, ...incoming]);
+  const events = fuseEvents(rawEvents);
+  const eventStatus = carryEventStatuses(
+    current.events,
+    events,
+    current.eventStatus,
+  );
+  set({ userEvents, rawEvents, events, eventStatus });
+  scheduleProjectSave(get);
+}
+
 function buildWaveformLevels(data: WaveformData): WaveformLevels {
-  const pool = (src: Uint8Array): Uint8Array => {
-    const out = new Uint8Array(Math.ceil(src.length / 4));
+  const pool = (source: Uint8Array): Uint8Array => {
+    const out = new Uint8Array(Math.ceil(source.length / 4));
     for (let i = 0; i < out.length; i++) {
-      let m = 0;
-      for (let j = i * 4; j < Math.min(src.length, i * 4 + 4); j++) {
-        if (src[j] > m) m = src[j];
+      let max = 0;
+      for (let j = i * 4; j < Math.min(source.length, i * 4 + 4); j++) {
+        if (source[j] > max) max = source[j];
       }
-      out[i] = m;
+      out[i] = max;
     }
     return out;
   };
@@ -378,32 +809,263 @@ function buildWaveformLevels(data: WaveformData): WaveformLevels {
     },
   ];
   while (levels[levels.length - 1].left.length > 2048) {
-    const prev = levels[levels.length - 1];
-    levels.push({ dt: prev.dt * 4, left: pool(prev.left), right: pool(prev.right) });
+    const previous = levels[levels.length - 1];
+    levels.push({
+      dt: previous.dt * 4,
+      left: pool(previous.left),
+      right: pool(previous.right),
+    });
   }
   return { levels };
 }
 
-/** Everything currently marked for removal, merged and sorted. */
-export function deriveCuts(s: {
-  analysis: AnalysisResult | null;
-  candidateStatus: Record<number, CandidateStatus>;
+export function deriveEdits(state: {
+  events: ContentEvent[];
+  eventStatus: Record<string, EventStatus>;
   manualCuts: ManualCut[];
-  showDetections: boolean;
-}): Cut[] {
-  const cuts: Cut[] = [];
-  if (s.showDetections) {
-    for (const c of s.analysis?.candidates ?? []) {
-      if (s.candidateStatus[c.id] === "cut") cuts.push({ start: c.start, end: c.end });
-    }
-  }
-  for (const m of s.manualCuts) cuts.push({ start: m.start, end: m.end });
-  cuts.sort((a, b) => a.start - b.start);
-  const merged: Cut[] = [];
-  for (const c of cuts) {
-    const prev = merged[merged.length - 1];
-    if (prev && c.start <= prev.end + 0.05) prev.end = Math.max(prev.end, c.end);
-    else merged.push({ ...c });
+}): { cuts: EditRange[]; mutes: EditRange[] } {
+  const cuts = state.events
+    .filter((event) => state.eventStatus[event.id] === "cut")
+    .map(({ start, end }) => ({ start, end }));
+  cuts.push(...state.manualCuts.map(({ start, end }) => ({ start, end })));
+  const mutes = state.events
+    .filter((event) => state.eventStatus[event.id] === "mute")
+    .map(({ start, end }) => ({ start, end }));
+  return { cuts: mergeRanges(cuts), mutes: mergeRanges(mutes) };
+}
+
+function mergeRanges(ranges: EditRange[]): EditRange[] {
+  ranges.sort((a, b) => a.start - b.start);
+  const merged: EditRange[] = [];
+  for (const range of ranges) {
+    const previous = merged[merged.length - 1];
+    if (previous && range.start <= previous.end + 0.05)
+      previous.end = Math.max(previous.end, range.end);
+    else merged.push({ ...range });
   }
   return merged;
+}
+
+function dedupeById(events: ContentEvent[]): ContentEvent[] {
+  const byId = new Map<string, ContentEvent>();
+  for (const event of events) byId.set(event.id, event);
+  return [...byId.values()].sort((a, b) => a.start - b.start);
+}
+
+function fuseEvents(events: ContentEvent[]): ContentEvent[] {
+  const clusters: ContentEvent[][] = [];
+  for (const event of dedupeById(events)) {
+    const cluster = clusters.find((members) => {
+      const differentSources = members.every(
+        (member) => member.sourceKey !== event.sourceKey,
+      );
+      const sameCategory = members[0].category === event.category;
+      const nearSameMoment = members.some(
+        (member) =>
+          event.start <= member.end + 0.75 &&
+          event.end >= member.start - 0.75 &&
+          Math.abs(event.peakTime - member.peakTime) <= 5,
+      );
+      const decisiveActions = new Set(
+        [...members, event]
+          .map((member) => member.suggestedAction)
+          .filter((action) => action !== "review"),
+      );
+      return (
+        differentSources &&
+        sameCategory &&
+        nearSameMoment &&
+        decisiveActions.size <= 1
+      );
+    });
+    if (cluster) cluster.push(event);
+    else clusters.push([event]);
+  }
+
+  return clusters
+    .map((members) => {
+      if (members.length === 1) return members[0];
+      const ordered = [...members].sort(
+        (a, b) =>
+          Number(b.suggestedAction !== "review") -
+            Number(a.suggestedAction !== "review") ||
+          b.confidence - a.confidence,
+      );
+      const primary = ordered[0];
+      const decisive = members.filter(
+        (member) => member.suggestedAction !== "review",
+      );
+      const bounds = decisive.length > 0 ? decisive : members;
+      const sourceKeys = [...new Set(members.map((member) => member.sourceKey))].sort();
+      const evidence = members
+        .flatMap((member) => member.evidence)
+        .filter(
+          (item, index, all) =>
+            all.findIndex(
+              (candidate) =>
+                candidate.source === item.source &&
+                candidate.label === item.label,
+            ) === index,
+        );
+      const maxConfidence = Math.max(
+        ...members.map((member) => member.confidence),
+      );
+      return {
+        ...primary,
+        id: `fused:${members
+          .map((member) => member.id)
+          .sort()
+          .join("+")}`,
+        start: Math.min(...bounds.map((member) => member.start)),
+        end: Math.max(...bounds.map((member) => member.end)),
+        peakTime: primary.peakTime,
+        severity: Math.max(
+          ...members.map((member) => member.severity),
+        ) as 1 | 2 | 3,
+        confidence: Math.min(
+          0.99,
+          maxConfidence + 0.07 * (sourceKeys.length - 1),
+        ),
+        evidence,
+        sourceKey: sourceKeys.join("|"),
+      };
+    })
+    .sort((a, b) => a.start - b.start);
+}
+
+function carryEventStatuses(
+  previousEvents: ContentEvent[],
+  nextEvents: ContentEvent[],
+  previousStatuses: Record<string, EventStatus>,
+): Record<string, EventStatus> {
+  const statuses = { ...previousStatuses };
+  for (const event of nextEvents) {
+    if (statuses[event.id]) continue;
+    const sources = new Set(event.sourceKey.split("|"));
+    const prior = previousEvents
+      .filter(
+        (candidate) =>
+          candidate.category === event.category &&
+          candidate.start <= event.end &&
+          candidate.end >= event.start &&
+          candidate.sourceKey
+            .split("|")
+            .some((source) => sources.has(source)),
+      )
+      .sort((a, b) => {
+        const overlap = (candidate: ContentEvent) =>
+          Math.max(
+            0,
+            Math.min(candidate.end, event.end) -
+              Math.max(candidate.start, event.start),
+          );
+        return overlap(b) - overlap(a);
+      })
+      .find((candidate) => (statuses[candidate.id] ?? "pending") !== "pending");
+    statuses[event.id] = prior ? statuses[prior.id] : "pending";
+  }
+  return statuses;
+}
+
+function autoAlignImportedEvents(
+  incoming: ContentEvent[],
+  existing: ContentEvent[],
+): { events: ContentEvent[]; offset: number } {
+  const anchors = existing.filter(
+    (event) =>
+      event.sourceKey === "loudness" && event.category === "frightening",
+  );
+  const imported = incoming.filter(
+    (event) => event.category === "frightening",
+  );
+  if (anchors.length < 3 || imported.length < 3)
+    return { events: incoming, offset: 0 };
+  const differences = imported
+    .map((event) => {
+      const nearest = anchors.reduce((best, anchor) =>
+        Math.abs(anchor.peakTime - event.peakTime) <
+        Math.abs(best.peakTime - event.peakTime)
+          ? anchor
+          : best,
+      );
+      return nearest.peakTime - event.peakTime;
+    })
+    .filter((difference) => Math.abs(difference) <= 30)
+    .sort((a, b) => a - b);
+  if (differences.length < 3) return { events: incoming, offset: 0 };
+  const median = differences[Math.floor(differences.length / 2)];
+  const inliers = differences.filter(
+    (difference) => Math.abs(difference - median) <= 2.5,
+  );
+  if (inliers.length < 3) return { events: incoming, offset: 0 };
+  const offset =
+    inliers.reduce((sum, difference) => sum + difference, 0) / inliers.length;
+  if (Math.abs(offset) < 0.08) return { events: incoming, offset: 0 };
+  return {
+    offset,
+    events: incoming.map((event) => ({
+      ...event,
+      id: `${event.id}-sync-${Math.round(offset * 10)}`,
+      start: Math.max(0, event.start + offset),
+      end: Math.max(0.1, event.end + offset),
+      peakTime: Math.max(0, event.peakTime + offset),
+      evidence: [
+        ...event.evidence,
+        {
+          source: "automatic timeline sync",
+          label: `Matched published timestamps to local audio impacts (${offset > 0 ? "+" : ""}${offset.toFixed(1)}s)`,
+          detail: null,
+          confidence: 0.82,
+        },
+      ],
+    })),
+  };
+}
+
+function inferMovieIdentity(fileName: string): { title: string; year: number | null } {
+  const stem = fileName.replace(/\.[^.]+$/, "");
+  const yearMatch = stem.match(/\b(19\d{2}|20\d{2})\b/);
+  const year = yearMatch ? Number(yearMatch[1]) : null;
+  const beforeYear = yearMatch ? stem.slice(0, yearMatch.index) : stem;
+  const title = beforeYear
+    .replace(/[._]+/g, " ")
+    .replace(
+      /\b(2160p|1080p|720p|bluray|webrip|web-dl|hdr|x264|x265|h264|h265)\b.*$/i,
+      "",
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+  return { title: title || stem, year };
+}
+
+function projectStorageKey(info: VideoInfo) {
+  return `videofy.project:${info.path}:${info.sizeBytes}:${Math.round(info.duration * 10)}`;
+}
+
+function loadProject(info: VideoInfo): SavedProject | null {
+  return readJson<SavedProject>(projectStorageKey(info));
+}
+
+function scheduleProjectSave(get: () => State) {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const state = get();
+    if (!state.info) return;
+    const project: SavedProject = {
+      eventStatus: state.eventStatus,
+      manualCuts: state.manualCuts,
+      nextManualId: state.nextManualId,
+      userEvents: state.userEvents,
+    };
+    localStorage.setItem(projectStorageKey(state.info), JSON.stringify(project));
+  }, 150);
+}
+
+function readJson<T>(key: string): T | null {
+  try {
+    const value = localStorage.getItem(key);
+    return value ? (JSON.parse(value) as T) : null;
+  } catch {
+    return null;
+  }
 }

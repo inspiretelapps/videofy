@@ -1,3 +1,17 @@
+export interface MediaTrack {
+  streamIndex: number;
+  kind: "audio" | "subtitle";
+  codec: string;
+  language: string | null;
+  title: string | null;
+  isDefault: boolean;
+  isForced: boolean;
+  isHearingImpaired: boolean;
+  isVisualImpaired: boolean;
+  isText: boolean;
+  channels: number;
+}
+
 export interface VideoInfo {
   path: string;
   fileName: string;
@@ -10,22 +24,77 @@ export interface VideoInfo {
   videoCodec: string;
   audioCodec: string;
   audioTracks: number;
+  tracks: MediaTrack[];
 }
 
-export interface ScareCandidate {
-  id: number;
+export type ContentCategory =
+  | "frightening"
+  | "violence"
+  | "sexual"
+  | "nudity"
+  | "language"
+  | "substances"
+  | "bullying"
+  | "disturbing";
+
+export type EventAction = "review" | "cut" | "mute";
+
+/// How far down the coarseness scale to mute spoken language.
+export type ProfanityTier = "off" | "strong" | "medium" | "mild";
+
+export interface Evidence {
+  source: string;
+  label: string;
+  detail: string | null;
+  confidence: number;
+}
+
+export interface ContentEvent {
+  id: string;
   start: number;
   end: number;
   peakTime: number;
-  score: number;
-  jumpLu: number;
+  category: ContentCategory;
+  severity: 1 | 2 | 3;
+  confidence: number;
+  reason: string;
+  suggestedAction: EventAction;
+  evidence: Evidence[];
+  sourceKey: string;
 }
 
 export interface AnalysisResult {
   duration: number;
   envelopeDt: number;
   envelope: number[];
-  candidates: ScareCandidate[];
+  events: ContentEvent[];
+}
+
+export interface TextAnalysisResult {
+  events: ContentEvent[];
+  source: string;
+  cueCount: number;
+  warnings: string[];
+}
+
+export interface AudioEventResult {
+  events: ContentEvent[];
+  model: string;
+  warnings: string[];
+}
+
+export interface SceneAnalysisResult {
+  events: ContentEvent[];
+  framesScanned: number;
+  verifier: string;
+  warnings: string[];
+}
+
+export interface GuideResult {
+  provider: string;
+  title: string | null;
+  events: ContentEvent[];
+  warnings: string[];
 }
 
 export interface WaveformData {
@@ -34,7 +103,6 @@ export interface WaveformData {
   right: number[];
 }
 
-/** Max-pooled downsample pyramid so the canvas never scans 240k buckets per frame. */
 export interface WaveformLevels {
   levels: { dt: number; left: Uint8Array; right: Uint8Array }[];
 }
@@ -43,11 +111,12 @@ export interface ExportResult {
   outPath: string;
   keptDuration: number;
   removedDuration: number;
+  mutedDuration: number;
   sizeBytes: number;
   segments: number;
 }
 
-export type CandidateStatus = "pending" | "cut" | "kept";
+export type EventStatus = "pending" | "cut" | "mute" | "kept";
 
 export interface ManualCut {
   id: number;
@@ -55,12 +124,20 @@ export interface ManualCut {
   end: number;
 }
 
-export interface Cut {
+export interface EditRange {
   start: number;
   end: number;
 }
 
 export interface Selection {
-  kind: "candidate" | "manual";
-  id: number;
+  kind: "event" | "manual";
+  id: string | number;
+}
+
+export interface ScanState {
+  running: boolean;
+  pct: number;
+  detail: string;
+  warnings: string[];
+  error: string | null;
 }

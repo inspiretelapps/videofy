@@ -38,9 +38,91 @@ pub fn ffprobe_path() -> String {
     find_tool("ffprobe")
 }
 
+/// Everything the analysis passes need from their environment: somewhere to
+/// cache per-movie results, somewhere to keep downloaded models, and a way to
+/// report progress. Implemented by the Tauri app at runtime and by
+/// [`HeadlessHost`] so the same detectors can run from `scan_report` without a
+/// GUI — which is what makes threshold calibration a terminal loop.
+pub trait ScanHost: Send + Sync {
+    fn cache_root(&self) -> Result<PathBuf, String>;
+    fn models_dir(&self) -> Result<PathBuf, String>;
+    fn emit(&self, event: &str, payload: serde_json::Value);
+}
+
+impl ScanHost for tauri::AppHandle {
+    fn cache_root(&self) -> Result<PathBuf, String> {
+        self.path().app_cache_dir().map_err(|e| e.to_string())
+    }
+    fn models_dir(&self) -> Result<PathBuf, String> {
+        Ok(self
+            .path()
+            .app_data_dir()
+            .map_err(|e| e.to_string())?
+            .join("models"))
+    }
+    fn emit(&self, event: &str, payload: serde_json::Value) {
+        use tauri::Emitter;
+        let _ = Emitter::emit(self, event, payload);
+    }
+}
+
+/// Host for command-line runs. Reuses the app's real cache and model
+/// directories so a headless scan warms the same caches the GUI reads.
+pub struct HeadlessHost {
+    cache: PathBuf,
+    models: PathBuf,
+    pub verbose: bool,
+    /// Last whole percent reported, so piping the output does not produce one
+    /// line per progress tick.
+    last_pct: std::sync::atomic::AtomicU8,
+}
+
+impl HeadlessHost {
+    pub fn new(verbose: bool) -> Result<Self, String> {
+        let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
+        let base = PathBuf::from(home).join("Library");
+        Ok(HeadlessHost {
+            cache: base.join("Caches").join("com.videofy.app"),
+            models: base
+                .join("Application Support")
+                .join("com.videofy.app")
+                .join("models"),
+            verbose,
+            last_pct: std::sync::atomic::AtomicU8::new(u8::MAX),
+        })
+    }
+}
+
+impl ScanHost for HeadlessHost {
+    fn cache_root(&self) -> Result<PathBuf, String> {
+        Ok(self.cache.clone())
+    }
+    fn models_dir(&self) -> Result<PathBuf, String> {
+        Ok(self.models.clone())
+    }
+    fn emit(&self, event: &str, payload: serde_json::Value) {
+        if !self.verbose {
+            return;
+        }
+        let Some(pct) = payload.get("pct").and_then(|v| v.as_f64()) else {
+            return;
+        };
+        let whole = pct.clamp(0.0, 100.0) as u8;
+        if self
+            .last_pct
+            .swap(whole, std::sync::atomic::Ordering::Relaxed)
+            == whole
+        {
+            return;
+        }
+        eprint!("\r  {event}: {whole:3}%    ");
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+    }
+}
+
 /// Per-source cache directory keyed by path + size + mtime, so proxies and
 /// analysis survive app restarts but invalidate if the file changes.
-pub fn cache_dir_for(app: &tauri::AppHandle, input: &str) -> Result<PathBuf, String> {
+pub fn cache_dir_for(host: &dyn ScanHost, input: &str) -> Result<PathBuf, String> {
     let meta = std::fs::metadata(input).map_err(|e| format!("cannot stat {input}: {e}"))?;
     let mtime = meta
         .modified()
@@ -51,12 +133,7 @@ pub fn cache_dir_for(app: &tauri::AppHandle, input: &str) -> Result<PathBuf, Str
     let mut h = sha1_smol::Sha1::new();
     h.update(format!("{input}|{}|{mtime}", meta.len()).as_bytes());
     let digest = h.digest().to_string();
-    let dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|e| e.to_string())?
-        .join("media")
-        .join(&digest[..16]);
+    let dir = host.cache_root()?.join("media").join(&digest[..16]);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
@@ -69,7 +146,10 @@ fn child_pids() -> &'static Mutex<HashSet<u32>> {
 /// Kill any ffmpeg/ffprobe children still running (called on app exit so a
 /// half-finished proxy or export doesn't linger as an orphan).
 pub fn kill_all_children() {
-    let pids: Vec<u32> = child_pids().lock().map(|s| s.iter().copied().collect()).unwrap_or_default();
+    let pids: Vec<u32> = child_pids()
+        .lock()
+        .map(|s| s.iter().copied().collect())
+        .unwrap_or_default();
     for pid in pids {
         let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
     }
@@ -124,7 +204,10 @@ pub fn drain_stderr(child: &mut Child) -> Option<std::thread::JoinHandle<String>
     Some(std::thread::spawn(move || {
         use std::io::BufRead;
         let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
-        for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
+        for line in std::io::BufReader::new(stderr)
+            .lines()
+            .map_while(Result::ok)
+        {
             if tail.len() >= 10 {
                 tail.pop_front();
             }
@@ -158,9 +241,7 @@ pub fn wait_checked(
     if let Ok(mut pids) = child_pids().lock() {
         pids.remove(&pid);
     }
-    let tail = stderr_drain
-        .and_then(|h| h.join().ok())
-        .unwrap_or_default();
+    let tail = stderr_drain.and_then(|h| h.join().ok()).unwrap_or_default();
     let status = status?;
     if status.success() {
         Ok(())

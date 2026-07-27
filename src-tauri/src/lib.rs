@@ -1,9 +1,14 @@
-mod analysis;
-mod export;
-mod media;
-mod probe;
-mod proxy;
-mod waveform;
+pub mod analysis;
+pub mod audio_events;
+pub mod content;
+pub mod export;
+pub mod guides;
+pub mod media;
+pub mod probe;
+pub mod proxy;
+pub mod scene_analysis;
+pub mod text_analysis;
+pub mod waveform;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -14,7 +19,12 @@ pub fn run() {
             probe::probe_video,
             probe::get_keyframes,
             analysis::analyze_audio,
+            audio_events::analyze_audio_events,
+            guides::import_timing_file,
+            guides::lookup_content_guide,
+            text_analysis::analyze_text,
             proxy::generate_proxy,
+            scene_analysis::analyze_scenes,
             export::export_video,
             waveform::get_waveform,
         ])

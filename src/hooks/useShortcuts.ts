@@ -10,7 +10,7 @@ export function useShortcuts() {
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
 
       const frame = 1 / (s.info?.fps || 24);
-      const candidates = s.analysis?.candidates ?? [];
+      const events = s.events;
 
       switch (e.key) {
         case " ":
@@ -62,17 +62,18 @@ export function useShortcuts() {
           break;
         case "Enter": {
           const sel = s.selection;
-          if (sel?.kind === "candidate") {
-            const cur = s.candidateStatus[sel.id] ?? "pending";
-            s.setCandidateStatus(sel.id, cur === "cut" ? "pending" : "cut");
+          if (sel?.kind === "event") {
+            const id = String(sel.id);
+            const current = s.eventStatus[id] ?? "pending";
+            s.setEventStatus(id, current === "cut" ? "pending" : "cut");
           }
           break;
         }
         case "Backspace":
         case "Delete": {
           const sel = s.selection;
-          if (sel?.kind === "manual") s.removeManualCut(sel.id);
-          else if (sel?.kind === "candidate") s.setCandidateStatus(sel.id, "kept");
+          if (sel?.kind === "manual") s.removeManualCut(Number(sel.id));
+          else if (sel?.kind === "event") s.setEventStatus(String(sel.id), "kept");
           break;
         }
         case "[":
@@ -84,13 +85,17 @@ export function useShortcuts() {
           // "next" match the same region forever.
           const items = [
             ...(s.showDetections
-              ? candidates
-                  .filter((c) => c.score >= s.minIntensity)
-                  .map((c) => ({
-                    kind: "candidate" as const,
-                    id: c.id,
-                    start: c.start,
-                    end: c.end,
+              ? events
+                  .filter(
+                    (event) =>
+                      event.severity >= s.minSeverity &&
+                      s.categories.includes(event.category),
+                  )
+                  .map((event) => ({
+                    kind: "event" as const,
+                    id: event.id,
+                    start: event.start,
+                    end: event.end,
                   }))
               : []),
             ...s.manualCuts.map((m) => ({

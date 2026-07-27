@@ -1,105 +1,174 @@
-import { useStore, type MinIntensity, type Sensitivity, type SortBy } from "../store";
+import { useState } from "react";
+import {
+  ALL_CATEGORIES,
+  deriveEdits,
+  useStore,
+  type MinSeverity,
+  type Sensitivity,
+  type SortBy,
+} from "../store";
 import { fmtSeconds, fmtTime } from "../lib/format";
-import type { ScareCandidate } from "../types";
+import type {
+  ContentCategory,
+  ProfanityTier,
+  ContentEvent,
+  ScanState,
+} from "../types";
 
-const SENSITIVITY_HELP: Record<Sensitivity, string> = {
-  strict: "Flags only the biggest loudness jumps — fewest false alarms.",
-  balanced: "A middle ground that suits most movies.",
-  sensitive: "Flags smaller jumps too — catches more, with more to review.",
+const CATEGORY_LABEL: Record<ContentCategory, string> = {
+  frightening: "Scary",
+  violence: "Violence",
+  sexual: "Sexual",
+  nudity: "Nudity",
+  language: "Language",
+  substances: "Substances",
+  bullying: "Bullying",
+  disturbing: "Disturbing",
+};
+
+const CATEGORY_COLOR: Record<ContentCategory, string> = {
+  frightening: "text-flare",
+  violence: "text-red-400",
+  sexual: "text-pink-300",
+  nudity: "text-pink-300",
+  language: "text-amber",
+  substances: "text-emerald-300",
+  bullying: "text-orange-300",
+  disturbing: "text-violet-300",
 };
 
 export default function SegmentsPanel() {
-  const analysis = useStore((s) => s.analysis);
-  const analysisError = useStore((s) => s.analysisError);
-  const analyzing = useStore((s) => s.analyzing);
-  const sensitivity = useStore((s) => s.sensitivity);
-  const changeSensitivity = useStore((s) => s.changeSensitivity);
-  const candidateStatus = useStore((s) => s.candidateStatus);
-  const manualCuts = useStore((s) => s.manualCuts);
-  const bulkSetStatus = useStore((s) => s.bulkSetStatus);
-  const removeManualCut = useStore((s) => s.removeManualCut);
-  const selection = useStore((s) => s.selection);
-  const sortBy = useStore((s) => s.sortBy);
-  const setSortBy = useStore((s) => s.setSortBy);
-  const minIntensity = useStore((s) => s.minIntensity);
-  const setMinIntensity = useStore((s) => s.setMinIntensity);
-  const checkedIds = useStore((s) => s.checkedIds);
-  const showDetections = useStore((s) => s.showDetections);
-  const toggleDetections = useStore((s) => s.toggleDetections);
+  const events = useStore((state) => state.events);
+  const scans = useStore((state) => state.scans);
+  const analyzing = useStore((state) => state.analyzing);
+  const sensitivity = useStore((state) => state.sensitivity);
+  const changeSensitivity = useStore((state) => state.changeSensitivity);
+  const eventStatus = useStore((state) => state.eventStatus);
+  const manualCuts = useStore((state) => state.manualCuts);
+  const bulkSetStatus = useStore((state) => state.bulkSetStatus);
+  const removeManualCut = useStore((state) => state.removeManualCut);
+  const selection = useStore((state) => state.selection);
+  const sortBy = useStore((state) => state.sortBy);
+  const setSortBy = useStore((state) => state.setSortBy);
+  const minSeverity = useStore((state) => state.minSeverity);
+  const setMinSeverity = useStore((state) => state.setMinSeverity);
+  const categories = useStore((state) => state.categories);
+  const toggleCategory = useStore((state) => state.toggleCategory);
+  const checkedIds = useStore((state) => state.checkedIds);
+  const showDetections = useStore((state) => state.showDetections);
+  const toggleDetections = useStore((state) => state.toggleDetections);
+  const [showSources, setShowSources] = useState(true);
+  const [showGuide, setShowGuide] = useState(false);
 
-  const candidates = analysis?.candidates ?? [];
-  const shown = candidates
-    .filter((c) => c.score >= minIntensity)
-    .sort((a, b) =>
-      sortBy === "intensity" ? b.score - a.score : a.peakTime - b.peakTime,
-    );
-  const hiddenCount = candidates.length - shown.length;
-  const shownPending = shown.filter((c) => candidateStatus[c.id] === "pending");
-  const checkedShown = checkedIds.filter((id) => shown.some((c) => c.id === id));
-  const bulkIds = checkedShown.length > 0 ? checkedShown : shownPending.map((c) => c.id);
-  const bulkLabel =
+  const shown = events
+    .filter(
+      (event) =>
+        event.severity >= minSeverity && categories.includes(event.category),
+    )
+    .sort((a, b) => {
+      if (sortBy === "severity")
+        return b.severity - a.severity || b.confidence - a.confidence;
+      if (sortBy === "confidence") return b.confidence - a.confidence;
+      return a.peakTime - b.peakTime;
+    });
+  const shownPending = shown.filter(
+    (event) => (eventStatus[event.id] ?? "pending") === "pending",
+  );
+  const checkedShown = checkedIds.filter((id) =>
+    shown.some((event) => event.id === id),
+  );
+  const bulkIds =
     checkedShown.length > 0
-      ? `${checkedShown.length} selected`
-      : `all ${shownPending.length} pending`;
+      ? checkedShown
+      : shownPending.map((event) => event.id);
+  const scansRunning = Object.values(scans).some((scan) => scan.running);
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-l border-seam bg-bay/40">
+    <aside className="flex w-96 shrink-0 flex-col border-l border-seam bg-bay/40">
       <div className="border-b border-seam px-4 pt-4 pb-3">
         <div className="flex items-baseline justify-between">
-          <h2 className="font-display text-sm font-semibold tracking-wide text-glow">
-            Detected scares
-          </h2>
-          <span className="flex items-baseline gap-2">
-            <span className="font-mono text-[11px] text-faint">{candidates.length}</span>
-            <button
-              onClick={toggleDetections}
-              className={`rounded px-1.5 py-0.5 text-[11px] transition-colors ${
-                showDetections
-                  ? "text-faint hover:bg-seam hover:text-glow"
-                  : "bg-amber/15 text-amber hover:bg-amber/25"
-              }`}
-            >
-              {showDetections ? "Hide" : "Show"}
-            </button>
-          </span>
+          <div>
+            <h2 className="font-display text-sm font-semibold tracking-wide text-glow">
+              Content review
+            </h2>
+            <p className="mt-0.5 text-[11px] text-faint">
+              {events.length} clues · {shown.length} shown
+              {scansRunning ? " · scanning…" : ""}
+            </p>
+          </div>
+          <button
+            onClick={toggleDetections}
+            className={`rounded px-2 py-1 text-[11px] ${
+              showDetections
+                ? "text-faint hover:bg-seam hover:text-glow"
+                : "bg-amber/15 text-amber"
+            }`}
+          >
+            {showDetections ? "Hide marks" : "Show marks"}
+          </button>
         </div>
 
-        {!showDetections && (
-          <p className="mt-2 text-[11px] leading-snug text-dust">
-            Detections are hidden and won't be cut on export — you're in manual
-            mode. Mark cuts with <Kbd>I</Kbd> and <Kbd>O</Kbd>.
-          </p>
+        <button
+          onClick={() => setShowSources((value) => !value)}
+          className="mt-3 flex w-full items-center justify-between text-left text-[10px] font-medium tracking-[0.15em] text-faint uppercase"
+        >
+          Scanner coverage <span>{showSources ? "−" : "+"}</span>
+        </button>
+        {showSources && (
+          <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+            <ScanChip label="Text" scan={scans.text} />
+            <ScanChip label="Sound" scan={scans.audio} />
+            <ScanChip label="Picture" scan={scans.vision} />
+            <ScanChip label="Guide" scan={scans.guide} />
+          </div>
         )}
 
-        {showDetections && (
-          <>
-        <p className="mt-3 text-[10px] font-medium tracking-[0.15em] text-faint uppercase">
-          Detection
+        <div className="mt-3 flex rounded-md border border-seam p-0.5">
+          {(["strict", "balanced", "sensitive"] as Sensitivity[]).map(
+            (value) => (
+              <button
+                key={value}
+                onClick={() => void changeSensitivity(value)}
+                disabled={analyzing}
+                title="Changes only the weak sudden-loudness detector"
+                className={`flex-1 rounded px-2 py-1 text-[11px] capitalize ${
+                  sensitivity === value
+                    ? "bg-seam text-glow"
+                    : "text-faint hover:text-dust"
+                }`}
+              >
+                {value}
+              </button>
+            ),
+          )}
+        </div>
+        <p className="mt-1 text-[10px] text-faint">
+          Sensitivity affects sudden-impact clues only.
         </p>
-        <div className="mt-1 flex rounded-md border border-seam p-0.5">
-          {(["strict", "balanced", "sensitive"] as Sensitivity[]).map((s) => (
+
+        <div className="mt-3 flex flex-wrap gap-1">
+          {ALL_CATEGORIES.map((category) => (
             <button
-              key={s}
-              onClick={() => void changeSensitivity(s)}
-              disabled={analyzing}
-              className={`flex-1 rounded px-2 py-1 text-[11px] capitalize transition-colors ${
-                sensitivity === s ? "bg-seam text-glow" : "text-faint hover:text-dust"
+              key={category}
+              onClick={() => toggleCategory(category)}
+              className={`rounded border px-1.5 py-0.5 text-[10px] ${
+                categories.includes(category)
+                  ? `border-seam bg-seam/70 ${CATEGORY_COLOR[category]}`
+                  : "border-transparent text-faint opacity-50"
               }`}
             >
-              {s}
+              {CATEGORY_LABEL[category]}
             </button>
           ))}
         </div>
-        <p className="mt-1.5 min-h-7 text-[11px] leading-snug text-faint">
-          {SENSITIVITY_HELP[sensitivity]}
-        </p>
 
-        <div className="mt-2 flex gap-2">
-          <Control label="Sort by">
+        <div className="mt-3 flex gap-2">
+          <Control label="Sort">
             {(
               [
                 ["time", "Time"],
-                ["intensity", "Intensity"],
+                ["severity", "Risk"],
+                ["confidence", "Conf."],
               ] as [SortBy, string][]
             ).map(([value, label]) => (
               <SmallToggle
@@ -111,74 +180,63 @@ export default function SegmentsPanel() {
               </SmallToggle>
             ))}
           </Control>
-          <Control label="Show">
+          <Control label="Minimum">
             {(
               [
-                [0, "All"],
-                [40, "Med+"],
-                [70, "High"],
-              ] as [MinIntensity, string][]
+                [1, "All"],
+                [2, "Med+"],
+                [3, "High"],
+              ] as [MinSeverity, string][]
             ).map(([value, label]) => (
               <SmallToggle
                 key={value}
-                active={minIntensity === value}
-                onClick={() => setMinIntensity(value)}
+                active={minSeverity === value}
+                onClick={() => setMinSeverity(value)}
               >
                 {label}
               </SmallToggle>
             ))}
           </Control>
         </div>
-        {hiddenCount > 0 && (
-          <p className="mt-1.5 text-[11px] text-faint">
-            {hiddenCount} lower-intensity {hiddenCount === 1 ? "scare" : "scares"} hidden
-          </p>
-        )}
 
         {bulkIds.length > 0 && (
-          <div className="mt-3 flex gap-2">
-            <button
-              onClick={() => bulkSetStatus(bulkIds, "cut")}
-              className="flex-1 rounded-md bg-flare/15 px-2 py-1.5 text-xs font-medium text-flare transition-colors hover:bg-flare/25"
-            >
-              Cut {bulkLabel}
-            </button>
-            <button
-              onClick={() => bulkSetStatus(bulkIds, "kept")}
-              className="flex-1 rounded-md bg-seam/70 px-2 py-1.5 text-xs font-medium text-dust transition-colors hover:text-glow"
-            >
-              Ignore {bulkLabel}
-            </button>
+          <div className="mt-3 grid grid-cols-3 gap-1.5">
+            <BulkButton onClick={() => bulkSetStatus(bulkIds, "cut")} tone="cut">
+              Cut {checkedShown.length || shownPending.length}
+            </BulkButton>
+            <BulkButton onClick={() => bulkSetStatus(bulkIds, "mute")} tone="mute">
+              Mute
+            </BulkButton>
+            <BulkButton onClick={() => bulkSetStatus(bulkIds, "kept")} tone="keep">
+              Keep
+            </BulkButton>
           </div>
         )}
-          </>
-        )}
+
+        <button
+          onClick={() => setShowGuide((value) => !value)}
+          className="mt-3 text-[11px] text-dust hover:text-glow"
+        >
+          {showGuide ? "Hide guide tools" : "Import guide timestamps…"}
+        </button>
+        {showGuide && <GuideTools />}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
-        {!showDetections ? null : analysisError ? (
+        {shown.length === 0 ? (
           <p className="px-2 py-3 text-xs leading-relaxed text-dust">
-            Couldn't analyze the audio, so nothing was detected automatically.
-            You can still mark cuts by hand with <Kbd>I</Kbd> and <Kbd>O</Kbd>.
-          </p>
-        ) : analyzing ? (
-          <p className="px-2 py-3 text-xs text-dust">Listening again…</p>
-        ) : candidates.length === 0 ? (
-          <p className="px-2 py-3 text-xs leading-relaxed text-dust">
-            No sudden-loudness moments found. Try the <em>sensitive</em> setting,
-            or mark cuts by hand with <Kbd>I</Kbd> and <Kbd>O</Kbd>.
-          </p>
-        ) : shown.length === 0 ? (
-          <p className="px-2 py-3 text-xs leading-relaxed text-dust">
-            All {candidates.length} detected scares are below this intensity.
-            Switch the filter back to <em>All</em> to see them.
+            {scansRunning
+              ? "The semantic scanners are still working. Results will appear here as each pass completes."
+              : "No content clues match these category and severity filters."}
           </p>
         ) : (
-          shown.map((c) => (
-            <CandidateRow
-              key={c.id}
-              candidate={c}
-              selected={selection?.kind === "candidate" && selection.id === c.id}
+          shown.map((event) => (
+            <EventRow
+              key={event.id}
+              event={event}
+              selected={
+                selection?.kind === "event" && selection.id === event.id
+              }
             />
           ))
         )}
@@ -188,25 +246,27 @@ export default function SegmentsPanel() {
             <p className="mt-4 mb-1 px-2 font-mono text-[10px] tracking-[0.2em] text-faint uppercase">
               Manual cuts
             </p>
-            {manualCuts.map((m) => (
+            {manualCuts.map((cut) => (
               <div
-                key={m.id}
+                key={cut.id}
                 className={`group mb-1 flex items-center justify-between rounded-md border px-3 py-2 ${
-                  selection?.kind === "manual" && selection.id === m.id
+                  selection?.kind === "manual" && selection.id === cut.id
                     ? "border-amber/60 bg-amber/10"
                     : "border-transparent hover:bg-seam/40"
                 }`}
-                onClick={() => jumpTo(m.start, m.end, { kind: "manual", id: m.id })}
+                onClick={() =>
+                  jumpTo(cut.start, cut.end, { kind: "manual", id: cut.id })
+                }
               >
                 <span className="font-mono text-[11px] text-glow">
-                  {fmtTime(m.start)} – {fmtTime(m.end)}
+                  {fmtTime(cut.start)} – {fmtTime(cut.end)}
                 </span>
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeManualCut(m.id);
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    removeManualCut(cut.id);
                   }}
-                  className="text-[11px] text-faint opacity-0 transition-opacity group-hover:opacity-100 hover:text-flare"
+                  className="text-[11px] text-faint opacity-0 group-hover:opacity-100 hover:text-flare"
                 >
                   Undo
                 </button>
@@ -223,13 +283,322 @@ export default function SegmentsPanel() {
   );
 }
 
-function Control({ label, children }: { label: string; children: React.ReactNode }) {
+function ScanChip({ label, scan }: { label: string; scan: ScanState }) {
+  const warning = scan.error ?? scan.warnings[0];
+  return (
+    <div
+      className={`rounded border px-2 py-1.5 ${
+        scan.error
+          ? "border-flare/30 bg-flare/5"
+          : scan.running
+            ? "border-amber/30 bg-amber/5"
+            : "border-seam bg-well/40"
+      }`}
+      title={warning ?? scan.detail}
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-medium text-dust">{label}</span>
+        <span className="font-mono text-[9px] text-faint">
+          {scan.running ? `${Math.floor(scan.pct)}%` : scan.error ? "!" : "✓"}
+        </span>
+      </div>
+      <p className="mt-0.5 truncate text-[9px] text-faint">
+        {scan.error ? "Unavailable" : scan.detail}
+      </p>
+    </div>
+  );
+}
+
+const PROFANITY_HINT: Record<ProfanityTier, string> = {
+  off: "No words are muted.",
+  strong: "The words almost every parent removes.",
+  medium: "Adds coarse-but-common words like “ass” and “damn”.",
+  mild: "Adds “hell”, “crap” and casual blasphemy. Expect false positives.",
+};
+
+function GuideTools() {
+  const settings = useStore((state) => state.settings);
+  const updateSettings = useStore((state) => state.updateSettings);
+  const guideTitle = useStore((state) => state.guideTitle);
+  const guideYear = useStore((state) => state.guideYear);
+  const guideOffset = useStore((state) => state.guideOffset);
+  const setGuideIdentity = useStore((state) => state.setGuideIdentity);
+  const setGuideOffset = useStore((state) => state.setGuideOffset);
+  const lookupGuide = useStore((state) => state.lookupGuide);
+  const importTimingFile = useStore((state) => state.importTimingFile);
+  const runDeepScan = useStore((state) => state.runDeepScan);
+  const guideScan = useStore((state) => state.scans.guide);
+
+  return (
+    <div className="mt-2 rounded-md border border-seam bg-well/45 p-2.5">
+      <div className="flex gap-1.5">
+        <input
+          value={guideTitle}
+          onChange={(event) =>
+            setGuideIdentity(event.target.value, guideYear)
+          }
+          placeholder="Movie title"
+          className="min-w-0 flex-1 rounded border border-seam bg-well px-2 py-1 text-[11px] text-glow"
+        />
+        <input
+          value={guideYear ?? ""}
+          onChange={(event) =>
+            setGuideIdentity(
+              guideTitle,
+              event.target.value ? Number(event.target.value) : null,
+            )
+          }
+          placeholder="Year"
+          className="w-16 rounded border border-seam bg-well px-2 py-1 text-[11px] text-glow"
+        />
+      </div>
+      <input
+        type="password"
+        value={settings.dddApiKey}
+        onChange={(event) => updateSettings({ dddApiKey: event.target.value })}
+        placeholder="Does the Dog Die? API key"
+        className="mt-1.5 w-full rounded border border-seam bg-well px-2 py-1 text-[11px] text-glow"
+      />
+      <div className="mt-1.5 flex gap-1.5">
+        <button
+          disabled={!settings.dddApiKey || guideScan.running}
+          onClick={() => void lookupGuide()}
+          className="flex-1 rounded bg-seam px-2 py-1 text-[11px] text-dust hover:text-glow disabled:opacity-40"
+        >
+          Look up guide
+        </button>
+        <button
+          onClick={() => void importTimingFile()}
+          className="flex-1 rounded bg-seam px-2 py-1 text-[11px] text-dust hover:text-glow"
+        >
+          Import SRT / SKP
+        </button>
+      </div>
+      <label className="mt-1.5 flex items-center gap-2 text-[10px] text-faint">
+        Imported timing offset
+        <input
+          type="number"
+          step="0.1"
+          value={guideOffset}
+          onChange={(event) => setGuideOffset(Number(event.target.value))}
+          className="w-20 rounded border border-seam bg-well px-1.5 py-0.5 font-mono text-glow"
+        />
+        seconds
+      </label>
+      <div className="mt-2 border-t border-seam pt-2">
+        <p className="text-[10px] text-faint">Mute spoken language</p>
+        <div className="mt-1 flex gap-1">
+          {(
+            [
+              ["off", "Off"],
+              ["strong", "Strong"],
+              ["medium", "+ Coarse"],
+              ["mild", "+ Mild"],
+            ] as [ProfanityTier, string][]
+          ).map(([tier, label]) => (
+            <button
+              key={tier}
+              onClick={() => updateSettings({ profanityTier: tier })}
+              className={`flex-1 rounded px-1 py-1 text-[10px] ${
+                settings.profanityTier === tier
+                  ? "bg-glow/15 text-glow"
+                  : "bg-seam text-dust hover:text-glow"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="mt-1 text-[10px] leading-snug text-faint">
+          {PROFANITY_HINT[settings.profanityTier]}
+        </p>
+      </div>
+      <button
+        onClick={() => void runDeepScan()}
+        className="mt-1.5 text-[10px] text-faint hover:text-dust"
+      >
+        Run semantic scans again
+      </button>
+      {(guideScan.error || guideScan.warnings.length > 0) && (
+        <p className="mt-1.5 text-[10px] leading-snug text-amber">
+          {guideScan.error ?? guideScan.warnings[0]}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function EventRow({
+  event,
+  selected,
+}: {
+  event: ContentEvent;
+  selected: boolean;
+}) {
+  const status = useStore(
+    (state) => state.eventStatus[event.id] ?? "pending",
+  );
+  const setStatus = useStore((state) => state.setEventStatus);
+  const checked = useStore((state) => state.checkedIds.includes(event.id));
+  const toggleChecked = useStore((state) => state.toggleChecked);
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div
+      className={`mb-1 cursor-pointer rounded-md border px-3 py-2 ${
+        selected
+          ? "border-flare/60 bg-flare/10"
+          : "border-transparent hover:bg-seam/40"
+      } ${status === "kept" ? "opacity-50" : ""}`}
+      onClick={() =>
+        jumpTo(event.start, event.end, { kind: "event", id: event.id })
+      }
+    >
+      <div className="flex items-center gap-2">
+        <button
+          role="checkbox"
+          aria-checked={checked}
+          onClick={(click) => {
+            click.stopPropagation();
+            toggleChecked(event.id);
+          }}
+          className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border text-[9px] ${
+            checked
+              ? "border-flare bg-flare text-well"
+              : "border-faint hover:border-dust"
+          }`}
+        >
+          {checked ? "✓" : ""}
+        </button>
+        <span className="font-mono text-[11px] text-glow">
+          {fmtTime(event.peakTime)}
+        </span>
+        <span
+          className={`rounded bg-well/70 px-1.5 py-0.5 text-[9px] font-medium ${CATEGORY_COLOR[event.category]}`}
+        >
+          {CATEGORY_LABEL[event.category]}
+        </span>
+        <SeverityDots severity={event.severity} />
+        <span className="ml-auto font-mono text-[9px] text-faint">
+          {Math.round(event.confidence * 100)}%
+        </span>
+      </div>
+      <p className="mt-1.5 text-[11px] leading-snug text-dust">
+        {event.reason}
+      </p>
+      <div className="mt-1.5 flex items-center justify-between">
+        <button
+          onClick={(click) => {
+            click.stopPropagation();
+            setExpanded((value) => !value);
+          }}
+          className="text-[10px] text-faint hover:text-dust"
+        >
+          {fmtSeconds(event.end - event.start)} · {event.evidence.length} source
+          {event.evidence.length === 1 ? "" : "s"} {expanded ? "▲" : "▼"}
+        </button>
+        <div className="flex gap-1">
+          <StatusButton
+            label="Cut"
+            active={status === "cut"}
+            onClick={() => setStatus(event.id, status === "cut" ? "pending" : "cut")}
+          />
+          <StatusButton
+            label="Mute"
+            active={status === "mute"}
+            tone="mute"
+            onClick={() =>
+              setStatus(event.id, status === "mute" ? "pending" : "mute")
+            }
+          />
+          <StatusButton
+            label="Keep"
+            active={status === "kept"}
+            tone="keep"
+            onClick={() =>
+              setStatus(event.id, status === "kept" ? "pending" : "kept")
+            }
+          />
+        </div>
+      </div>
+      {expanded && (
+        <div className="mt-2 space-y-1 border-t border-seam/70 pt-2">
+          {event.evidence.map((evidence, index) => (
+            <div key={`${evidence.source}-${index}`}>
+              <p className="text-[10px] text-dust">{evidence.source}</p>
+              <p className="select-text text-[10px] leading-snug text-faint">
+                {evidence.label}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatusButton({
+  label,
+  active,
+  tone = "cut",
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  tone?: "cut" | "mute" | "keep";
+  onClick: () => void;
+}) {
+  const activeClass =
+    tone === "cut"
+      ? "bg-flare text-well"
+      : tone === "mute"
+        ? "bg-amber text-well"
+        : "bg-dust text-well";
+  return (
+    <button
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+      className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+        active ? activeClass : "bg-seam/70 text-dust hover:text-glow"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+function SeverityDots({ severity }: { severity: number }) {
+  return (
+    <span className="flex gap-0.5" title={`severity ${severity} of 3`}>
+      {[1, 2, 3].map((level) => (
+        <span
+          key={level}
+          className={`h-1.5 w-1.5 rounded-full ${
+            level <= severity ? "bg-flare" : "bg-seam"
+          }`}
+        />
+      ))}
+    </span>
+  );
+}
+
+function Control({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex-1">
       <p className="text-[10px] font-medium tracking-[0.15em] text-faint uppercase">
         {label}
       </p>
-      <div className="mt-1 flex rounded-md border border-seam p-0.5">{children}</div>
+      <div className="mt-1 flex rounded-md border border-seam p-0.5">
+        {children}
+      </div>
     </div>
   );
 }
@@ -246,9 +615,34 @@ function SmallToggle({
   return (
     <button
       onClick={onClick}
-      className={`flex-1 rounded px-1 py-0.5 text-[10px] transition-colors ${
+      className={`flex-1 rounded px-1 py-0.5 text-[10px] ${
         active ? "bg-seam text-glow" : "text-faint hover:text-dust"
       }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function BulkButton({
+  children,
+  tone,
+  onClick,
+}: {
+  children: React.ReactNode;
+  tone: "cut" | "mute" | "keep";
+  onClick: () => void;
+}) {
+  const toneClass =
+    tone === "cut"
+      ? "bg-flare/15 text-flare"
+      : tone === "mute"
+        ? "bg-amber/15 text-amber"
+        : "bg-seam/70 text-dust";
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-md px-2 py-1.5 text-[11px] font-medium ${toneClass}`}
     >
       {children}
     </button>
@@ -258,139 +652,42 @@ function SmallToggle({
 function jumpTo(
   start: number,
   end: number,
-  sel: { kind: "candidate" | "manual"; id: number },
+  selection: { kind: "event" | "manual"; id: string | number },
 ) {
-  const s = useStore.getState();
-  s.select(sel);
-  s.zoomToRange(start, end);
-  s.seekTo(Math.max(0, start - 1.5));
-}
-
-function CandidateRow({
-  candidate: c,
-  selected,
-}: {
-  candidate: ScareCandidate;
-  selected: boolean;
-}) {
-  const status = useStore((s) => s.candidateStatus[c.id] ?? "pending");
-  const setStatus = useStore((s) => s.setCandidateStatus);
-  const checked = useStore((s) => s.checkedIds.includes(c.id));
-  const toggleChecked = useStore((s) => s.toggleChecked);
-
-  return (
-    <div
-      className={`mb-1 cursor-pointer rounded-md border px-3 py-2 transition-colors ${
-        selected
-          ? "border-flare/60 bg-flare/10"
-          : "border-transparent hover:bg-seam/40"
-      } ${status === "kept" ? "opacity-50" : ""}`}
-      onClick={() => jumpTo(c.start, c.end, { kind: "candidate", id: c.id })}
-    >
-      <div className="flex items-center justify-between">
-        <span className="flex items-center gap-2">
-          <button
-            role="checkbox"
-            aria-checked={checked}
-            aria-label={`Select the scare at ${fmtTime(c.peakTime)}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              toggleChecked(c.id);
-            }}
-            className={`flex h-3.5 w-3.5 items-center justify-center rounded-sm border text-[9px] leading-none transition-colors ${
-              checked
-                ? "border-flare bg-flare text-well"
-                : "border-faint hover:border-dust"
-            }`}
-          >
-            {checked ? "✓" : ""}
-          </button>
-          <span className="font-mono text-[11px] text-glow">{fmtTime(c.peakTime)}</span>
-        </span>
-        <ScoreFlare score={c.score} />
-      </div>
-      <div className="mt-1.5 flex items-center justify-between">
-        <span className="text-[11px] text-faint">{fmtSeconds(c.end - c.start)}</span>
-        <div className="flex gap-1">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setStatus(c.id, status === "cut" ? "pending" : "cut");
-            }}
-            className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
-              status === "cut"
-                ? "bg-flare text-well"
-                : "bg-seam/70 text-dust hover:text-flare"
-            }`}
-          >
-            Cut
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setStatus(c.id, status === "kept" ? "pending" : "kept");
-            }}
-            className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
-              status === "kept"
-                ? "bg-dust text-well"
-                : "bg-seam/70 text-dust hover:text-glow"
-            }`}
-          >
-            Ignore
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** Score as a tiny flame meter: hotter = taller bars. */
-function ScoreFlare({ score }: { score: number }) {
-  const bars = 4;
-  const lit = Math.max(1, Math.round((score / 100) * bars));
-  return (
-    <span className="flex items-end gap-[2px]" title={`intensity ${score} of 100`}>
-      {Array.from({ length: bars }, (_, i) => (
-        <span
-          key={i}
-          className={`w-[3px] rounded-sm ${i < lit ? "bg-flare" : "bg-seam"}`}
-          style={{ height: 4 + i * 2.5 }}
-        />
-      ))}
-    </span>
-  );
+  const state = useStore.getState();
+  state.select(selection);
+  state.zoomToRange(start, end);
+  state.seekTo(Math.max(0, start - 1.5));
 }
 
 function SummaryFooter() {
-  const analysis = useStore((s) => s.analysis);
-  const candidateStatus = useStore((s) => s.candidateStatus);
-  const manualCuts = useStore((s) => s.manualCuts);
-  const showDetections = useStore((s) => s.showDetections);
-  const cutCandidates = showDetections
-    ? (analysis?.candidates ?? []).filter((c) => candidateStatus[c.id] === "cut")
-    : [];
-  const totalCut =
-    cutCandidates.reduce((acc, c) => acc + (c.end - c.start), 0) +
-    manualCuts.reduce((acc, m) => acc + (m.end - m.start), 0);
-  const count = cutCandidates.length + manualCuts.length;
+  const events = useStore((state) => state.events);
+  const eventStatus = useStore((state) => state.eventStatus);
+  const manualCuts = useStore((state) => state.manualCuts);
+  const edits = deriveEdits({ events, eventStatus, manualCuts });
+  const removed = edits.cuts.reduce(
+    (total, range) => total + range.end - range.start,
+    0,
+  );
+  const muted = edits.mutes.reduce(
+    (total, range) => total + range.end - range.start,
+    0,
+  );
+  if (edits.cuts.length === 0 && edits.mutes.length === 0) {
+    return <p className="text-xs text-dust">Nothing marked for removal yet.</p>;
+  }
   return (
     <p className="text-xs text-dust">
-      {count === 0 ? (
-        "Nothing marked for removal yet."
-      ) : (
+      <span className="text-glow">{edits.cuts.length}</span> cut
+      {edits.cuts.length === 1 ? "" : "s"} ·{" "}
+      <span className="text-glow">{fmtSeconds(removed)}</span>
+      {edits.mutes.length > 0 && (
         <>
-          <span className="text-glow">{count}</span> cut{count === 1 ? "" : "s"} ·{" "}
-          <span className="text-glow">{fmtSeconds(totalCut)}</span> removed
+          {" "}
+          · <span className="text-amber">{edits.mutes.length}</span> mute
+          {edits.mutes.length === 1 ? "" : "s"} ({fmtSeconds(muted)})
         </>
       )}
     </p>
-  );
-}
-
-function Kbd({ children }: { children: React.ReactNode }) {
-  return (
-    <kbd className="rounded border border-seam bg-well px-1 font-mono text-[10px] text-dust">
-      {children}
-    </kbd>
   );
 }

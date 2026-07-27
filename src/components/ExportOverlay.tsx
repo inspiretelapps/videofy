@@ -16,7 +16,8 @@ export default function ExportOverlay() {
               Exporting clean copy
             </h3>
             <p className="mt-1 text-sm text-dust">
-              Copying the original picture — no re-encoding, no quality loss.
+              Keeping the original picture while applying approved cuts and
+              audio mutes.
             </p>
             <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-seam">
               <div
@@ -50,6 +51,9 @@ export default function ExportOverlay() {
               </span>{" "}
               across {exporting.result.segments} kept segment
               {exporting.result.segments === 1 ? "" : "s"} ·{" "}
+              {exporting.result.mutedDuration > 0
+                ? `${fmtSeconds(exporting.result.mutedDuration)} muted · `
+                : ""}
               {fmtBytes(exporting.result.sizeBytes)} · original quality.
             </p>
             <p className="mt-3 truncate font-mono text-[11px] text-faint">

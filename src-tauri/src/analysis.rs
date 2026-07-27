@@ -1,7 +1,8 @@
-use crate::media;
+use crate::content::{stable_id, ContentCategory, ContentEvent, EventAction, Evidence};
+use crate::media::ScanHost;
+use crate::{media, probe};
 use serde::{Deserialize, Serialize};
 use std::io::BufRead;
-use tauri::Emitter;
 
 /// Momentary (400ms) and short-term (3s) EBU R128 loudness sampled every 100ms.
 #[derive(Serialize, Deserialize, Default)]
@@ -13,25 +14,12 @@ struct Series {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct ScareCandidate {
-    pub id: u32,
-    pub start: f64,
-    pub end: f64,
-    pub peak_time: f64,
-    /// 1-100, how confident we are this is a jump-scare-like event
-    pub score: u32,
-    /// how far the momentary loudness jumped above the preceding baseline, in LU
-    pub jump_lu: f64,
-}
-
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
 pub struct AnalysisResult {
     pub duration: f64,
     pub envelope_dt: f64,
     /// max momentary loudness (LUFS) per bucket, for the timeline waveform
     pub envelope: Vec<f64>,
-    pub candidates: Vec<ScareCandidate>,
+    pub events: Vec<ContentEvent>,
 }
 
 #[tauri::command]
@@ -44,21 +32,39 @@ pub async fn analyze_audio(
     tauri::async_runtime::spawn_blocking(move || {
         let series = ensure_series(&app, &path, duration)?;
         let sens = sensitivity.unwrap_or(0.5).clamp(0.0, 1.0);
-        let candidates = detect(&series, sens);
+        let events = detect(&series, sens);
         Ok(AnalysisResult {
             duration,
             envelope_dt: envelope_dt(duration),
             envelope: envelope(&series, duration),
-            candidates,
+            events,
         })
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-/// Runs ffmpeg's ebur128 filter over the first audio track (cached per file).
-fn ensure_series(app: &tauri::AppHandle, path: &str, duration: f64) -> Result<Series, String> {
-    let cache = media::cache_dir_for(app, path)?.join("loudness.json");
+/// Loudness pass callable without a Tauri app, for `scan_report`.
+pub fn analyze_with_host(
+    host: &dyn ScanHost,
+    path: &str,
+    duration: f64,
+    sensitivity: f64,
+) -> Result<AnalysisResult, String> {
+    let series = ensure_series(host, path, duration)?;
+    Ok(AnalysisResult {
+        duration,
+        envelope_dt: envelope_dt(duration),
+        envelope: envelope(&series, duration),
+        events: detect(&series, sensitivity.clamp(0.0, 1.0)),
+    })
+}
+
+/// Runs ffmpeg's ebur128 filter over the preferred non-description audio track.
+fn ensure_series(host: &dyn ScanHost, path: &str, duration: f64) -> Result<Series, String> {
+    let info = probe::probe_sync(path)?;
+    let audio_stream = probe::preferred_audio_stream(&info).ok_or("no audio track found")?;
+    let cache = media::cache_dir_for(host, path)?.join(format!("loudness-v2-{audio_stream}.json"));
     let _guard = media::JobGuard::acquire(format!("analyze:{}", cache.display()))?;
     if let Ok(bytes) = std::fs::read(&cache) {
         if let Ok(series) = serde_json::from_slice::<Series>(&bytes) {
@@ -69,15 +75,24 @@ fn ensure_series(app: &tauri::AppHandle, path: &str, duration: f64) -> Result<Se
     }
 
     let ffmpeg = media::ffmpeg_path();
+    let audio_map = format!("0:{audio_stream}");
     let mut child = media::spawn(
         &ffmpeg,
         &[
-            "-hide_banner", "-nostats",
-            "-i", path,
-            "-map", "0:a:0",
-            "-vn", "-sn", "-dn",
-            "-af", "ebur128",
-            "-f", "null", "-",
+            "-hide_banner",
+            "-nostats",
+            "-i",
+            path,
+            "-map",
+            &audio_map,
+            "-vn",
+            "-sn",
+            "-dn",
+            "-af",
+            "ebur128",
+            "-f",
+            "null",
+            "-",
         ],
     )?;
 
@@ -95,8 +110,15 @@ fn ensure_series(app: &tauri::AppHandle, path: &str, duration: f64) -> Result<Se
             lines_since_emit += 1;
             if lines_since_emit >= 100 {
                 lines_since_emit = 0;
-                let pct = if duration > 0.0 { (t / duration * 100.0).min(100.0) } else { 0.0 };
-                let _ = app.emit("analysis-progress", serde_json::json!({ "t": t, "pct": pct }));
+                let pct = if duration > 0.0 {
+                    (t / duration * 100.0).min(100.0)
+                } else {
+                    0.0
+                };
+                host.emit(
+                    "analysis-progress",
+                    serde_json::json!({ "t": t, "pct": pct }),
+                );
             }
         } else {
             error_tail.push(line);
@@ -108,14 +130,14 @@ fn ensure_series(app: &tauri::AppHandle, path: &str, duration: f64) -> Result<Se
 
     let status = child.wait().map_err(|e| e.to_string())?;
     if !status.success() || series.t.is_empty() {
-        return Err(format!(
-            "audio analysis failed:\n{}",
-            error_tail.join("\n")
-        ));
+        return Err(format!("audio analysis failed:\n{}", error_tail.join("\n")));
     }
 
     let _ = std::fs::write(&cache, serde_json::to_vec(&series).unwrap_or_default());
-    let _ = app.emit("analysis-progress", serde_json::json!({ "t": duration, "pct": 100.0 }));
+    host.emit(
+        "analysis-progress",
+        serde_json::json!({ "t": duration, "pct": 100.0 }),
+    );
     Ok(series)
 }
 
@@ -163,7 +185,7 @@ const CANDIDATE_MERGE_GAP_S: f64 = 3.0;
 /// A jump scare reads as: sustained baseline loudness, then the momentary
 /// level suddenly jumps far above it. We compare each 100ms momentary sample
 /// against the median short-term loudness of the preceding ~20 seconds.
-fn detect(series: &Series, sensitivity: f64) -> Vec<ScareCandidate> {
+fn detect(series: &Series, sensitivity: f64) -> Vec<ContentEvent> {
     let jump_threshold = 16.0 - 8.0 * sensitivity; // LU above baseline
     let min_loud = -24.0 - 8.0 * sensitivity; // absolute LUFS floor
 
@@ -202,7 +224,10 @@ fn detect(series: &Series, sensitivity: f64) -> Vec<ScareCandidate> {
         }
         let jump = m - baseline;
         if jump >= jump_threshold && m >= min_loud {
-            spikes.push(Spike { t: series.t[i], jump });
+            spikes.push(Spike {
+                t: series.t[i],
+                jump,
+            });
         }
     }
 
@@ -219,7 +244,7 @@ fn detect(series: &Series, sensitivity: f64) -> Vec<ScareCandidate> {
     }
 
     let total = series.t.last().copied().unwrap_or(0.0);
-    let mut candidates: Vec<ScareCandidate> = Vec::new();
+    let mut candidates: Vec<ContentEvent> = Vec::new();
     for (start, end, peak_jump) in events {
         let c_start = (start - PRE_PAD_S).max(0.0);
         let c_end = (end + POST_PAD_S).min(total);
@@ -229,26 +254,53 @@ fn detect(series: &Series, sensitivity: f64) -> Vec<ScareCandidate> {
             .max_by(|a, b| a.jump.partial_cmp(&b.jump).unwrap())
             .map(|s| s.t)
             .unwrap_or(start);
-        let score = ((peak_jump - jump_threshold) * 6.0 + 20.0).clamp(1.0, 100.0) as u32;
+        let confidence = (0.28 + (peak_jump - jump_threshold) / 36.0).clamp(0.28, 0.78);
+        let severity = if peak_jump >= 26.0 {
+            3
+        } else if peak_jump >= 18.0 {
+            2
+        } else {
+            1
+        };
         match candidates.last_mut() {
             Some(prev) if c_start - prev.end <= CANDIDATE_MERGE_GAP_S => {
                 prev.end = prev.end.max(c_end);
-                prev.score = prev.score.max(score);
-                prev.jump_lu = prev.jump_lu.max(peak_jump);
+                prev.confidence = prev.confidence.max(confidence);
+                prev.severity = prev.severity.max(severity);
+                prev.evidence.push(Evidence {
+                    source: "loudness".into(),
+                    label: format!("{peak_jump:.1} LU above the local baseline"),
+                    detail: Some(
+                        "Sudden impact; content is not known from audio level alone.".into(),
+                    ),
+                    confidence,
+                });
             }
-            _ => candidates.push(ScareCandidate {
-                id: candidates.len() as u32,
+            _ => candidates.push(ContentEvent {
+                id: stable_id(
+                    "loudness",
+                    ContentCategory::Frightening,
+                    c_start,
+                    c_end,
+                    &format!("{peak_jump:.1}"),
+                ),
                 start: c_start,
                 end: c_end,
                 peak_time,
-                score,
-                jump_lu: peak_jump,
+                category: ContentCategory::Frightening,
+                severity,
+                confidence,
+                reason: "Sudden loud impact after quieter audio".into(),
+                suggested_action: EventAction::Review,
+                evidence: vec![Evidence {
+                    source: "loudness".into(),
+                    label: format!("{peak_jump:.1} LU above the local baseline"),
+                    detail: Some("Weak jump-scare clue; verify the picture and context.".into()),
+                    confidence,
+                }],
+                source_key: "loudness".into(),
             }),
         }
-    }
-    // re-number after merging
-    for (i, c) in candidates.iter_mut().enumerate() {
-        c.id = i as u32;
     }
     candidates
 }
@@ -273,7 +325,10 @@ mod tests {
         // deep silence: %6.1f leaves no space before values at/below -100
         let glued = "[Parsed_ebur128_0 @ 0x123] t: 0.199979   TARGET:-23 LUFS    M:-120.7 S:-120.7     I: -70.0 LUFS       LRA: 0.0 LU";
         assert_eq!(parse_ebur128_line(glued), Some((0.199979, -120.7, -120.7)));
-        assert_eq!(parse_ebur128_line("size=N/A time=00:01:00 bitrate=N/A"), None);
+        assert_eq!(
+            parse_ebur128_line("size=N/A time=00:01:00 bitrate=N/A"),
+            None
+        );
     }
 
     #[test]
@@ -287,9 +342,12 @@ mod tests {
         let candidates = detect(&series, 0.5);
         assert_eq!(candidates.len(), 1);
         let c = &candidates[0];
-        assert!(c.start < 30.0 && c.end > 31.4, "padded range covers the burst");
+        assert!(
+            c.start < 30.0 && c.end > 31.4,
+            "padded range covers the burst"
+        );
         assert!(c.peak_time >= 30.0 && c.peak_time <= 31.5);
-        assert!(c.score > 50, "a 35 LU jump should score high, got {}", c.score);
+        assert!(c.confidence > 0.6, "a 35 LU jump should be a useful clue");
     }
 
     #[test]

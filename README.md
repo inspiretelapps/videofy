@@ -1,151 +1,177 @@
 # Videofy
 
-**Movie night, minus the jump scares.**
+**A faster way for a parent to make a child-friendly copy of a movie.**
 
-Videofy is a desktop app that listens to a movie’s soundtrack for the audio signature of a jump scare — a sudden loudness spike out of quiet — lets you review each detected moment, and exports a copy with those parts cut out.
+Videofy is a local-first macOS/Tauri editor that finds potentially unsuitable
+moments, explains why each moment was flagged, and lets you mark it as
+**Cut**, **Mute**, or **Keep** before exporting a cleaned copy.
 
-The export is a **lossless stream copy**: same picture quality, essentially the same file size, no re-encoding.
+It does not treat loudness as proof that a scene is scary. Loudness is now one
+weak clue in a hybrid scan that also examines text, semantic sound events,
+representative scene frames, accessibility tracks, and optional human guide
+timestamps.
 
-## Features
+## What the scanner checks
 
-- **Automatic detection** — finds jump-scare candidates from loudness spikes (not every loud action scene)
-- **Review & edit** — cut, ignore, multi-select, bulk actions, intensity sort/filter
-- **Manual cuts** — mark your own in/out points when detection isn’t enough
-- **JKL shuttle** — reverse / stop / forward with speed doubling (2×, 4×, 8×)
-- **Stereo waveform timeline** — mirrored L/R peak lanes for precise scrubbing
-- **Fast preview** — 540p hardware-encoded proxy so any container/codec scrubs smoothly
-- **Lossless export** — ffmpeg concat demuxer with `-c copy`; cuts snap to keyframes so scary frames never leak back in
-- **Per-file cache** — analysis, keyframes, and proxy are cached; re-opening is instant
+| Pass | What it contributes |
+| --- | --- |
+| Embedded subtitles / SDH | Profanity, threats, violence, sexual references, substances, bullying, and captions such as `[SCREAMS]` |
+| Audio description | Narrated visual actions that ordinary subtitles can miss |
+| Local Whisper fallback | English dialogue when usable text subtitles are unavailable; includes word-level timing for short profanity mutes |
+| YAMNet sound classifier | Screams, crying, growls, gunshots, explosions, breaking glass, crashes, and similar semantic sound clues |
+| Scene scan | Frames at scene changes, checked for conservative visual risk clues |
+| Does the Dog Die? | Optional human-written timestamped ratings and Scene Alerts, depending on the API tier |
+| SRT / VTT / SKP import | Published or hand-authored timing ranges, with a manual offset and conservative automatic jump-scare alignment |
+| Loudness | Low-confidence sudden-impact evidence only |
+
+Overlapping clues for the same category and moment are fused into one event.
+Severity and detector confidence remain separate, and the evidence behind each
+event is visible in the review panel.
+
+Current categories are frightening content, violence, sexual material, nudity,
+language, substances, bullying, and other disturbing material.
+
+## Review and editing
+
+- Filter by category and minimum severity.
+- Sort by time, severity, or confidence.
+- Inspect the evidence and source for every result.
+- Mark an event as **Cut**, **Mute**, or **Keep**.
+- Bulk-apply a decision to checked or visible pending events.
+- Add precise manual IN/OUT cuts.
+- Import guide timestamps or look up a title through Does the Dog Die?.
+- Keep review decisions and manual cuts when the movie is reopened.
+- Change loudness sensitivity without discarding decisions made on the other
+  scanner passes.
+
+The waveform, proxy, model results, and media analysis are cached per source
+file. The editor opens as soon as the proxy and basic analysis are ready;
+semantic results appear progressively as the deeper passes complete.
 
 ## Requirements
 
 | Dependency | Why | Notes |
 | --- | --- | --- |
-| **ffmpeg** + **ffprobe** | Probe, analyze loudness, build proxy, export | Must be on your `PATH` (or in a standard Homebrew/MacPorts location) |
-| **macOS** (primary) | Desktop shell | Built and tested on Apple Silicon; Windows/Linux may work via Tauri but aren’t first-class yet |
-| **Node.js 22+** | Frontend tooling | Only needed to build from source |
-| **Rust** (stable) | Tauri backend | Only needed to build from source |
+| **ffmpeg** + **ffprobe** | Media probing, track extraction, proxy, scanning, and export | Required at runtime |
+| **macOS** | Primary desktop target | Apple Silicon is the primary tested target |
+| **Node.js 22+** | Frontend tooling | Build-time only |
+| **Rust stable** | Tauri backend | Build-time only |
+| **Does the Dog Die? API key** | Optional external guide lookup | Timestamp ratings require the appropriate provider tier |
 
-### Install ffmpeg (required to run the app)
+Install ffmpeg on macOS:
 
 ```sh
-# macOS
 brew install ffmpeg
-
-# Ubuntu / Debian
-sudo apt install ffmpeg
-
-# Windows (Chocolatey)
-choco install ffmpeg
 ```
 
-Confirm both tools are available:
+Videofy also searches `/opt/homebrew/bin`, `/usr/local/bin`, and
+`/opt/local/bin`, which helps when the app is launched from Finder.
 
-```sh
-ffmpeg -version
-ffprobe -version
-```
+## First-run models
 
-> **Note:** If you launch the app from Finder, it may not inherit your shell `PATH`. Videofy also looks in `/opt/homebrew/bin`, `/usr/local/bin`, and `/opt/local/bin` for ffmpeg/ffprobe.
+The semantic models are downloaded into Videofy’s application-data `models`
+folder the first time they are needed:
 
-## Install from source
+- YAMNet ONNX and its AudioSet labels for the sound-event pass.
+- Whisper `base.en` only when transcription or an audio-description track is
+  needed.
+
+Downloads are atomic and progress is shown in the scanner coverage panel.
+Whisper is English-only in the current implementation.
+
+## Install and run from source
 
 ```sh
 git clone https://github.com/inspiretelapps/videofy.git
 cd videofy
 npm install
-```
-
-### Development (hot reload)
-
-```sh
 npm run tauri dev
 ```
 
-### Production build (`.app` / installer)
+Build a production app:
 
 ```sh
 npm run tauri build
 ```
 
-Artifacts land under:
+Artifacts are written under `src-tauri/target/release/bundle/`.
 
-```
-src-tauri/target/release/bundle/macos/Videofy.app
-src-tauri/target/release/bundle/dmg/Videofy_*.dmg
-```
-
-Open the app:
+Run validation:
 
 ```sh
-open src-tauri/target/release/bundle/macos/Videofy.app
-```
-
-### Tests
-
-```sh
+npm run build
 cd src-tauri
 cargo test
 ```
 
 ## Usage
 
-1. Drop a video onto the window, or click to pick a file (mp4, mkv, mov, and most common containers).
-2. Wait for proxy generation and loudness analysis (first open only; results are cached).
-3. Scrub the timeline / use keyboard shortcuts to review each detection.
-4. **Enter** to cut a scare, **Delete** to ignore it, or mark manual cuts with **I** / **O**.
-5. Press **E** (or use Export) to write a clean copy next to the original.
+1. Drop a movie onto the window or choose a file.
+2. Start reviewing when the editor opens; Text, Sound, and Picture results will
+   continue to appear in the coverage panel.
+3. Expand an event to see why it was flagged.
+4. Choose **Cut**, **Mute**, or **Keep**, and add manual IN/OUT cuts where
+   required.
+5. Optionally import an SRT/VTT/SKP timing file or use a Does the Dog Die? API
+   key to fetch timestamped guide entries.
+6. Export the cleaned copy.
 
 ### Keyboard shortcuts
 
 | Key | Action |
 | --- | --- |
 | `Space` | Play / pause |
-| `J` `K` `L` | Shuttle: reverse / stop / forward — press `J` or `L` again for 2×, 4×, 8× |
-| `[` `]` | Previous / next detected scare |
-| `Enter` | Cut the selected scare |
-| `Delete` | Ignore the selected scare / remove manual cut |
+| `J` `K` `L` | Reverse / stop / forward shuttle; repeat for 2×, 4×, 8× |
+| `[` `]` | Previous / next visible event or manual cut |
+| `Enter` | Toggle Cut on the selected event |
+| `Delete` | Keep the selected event, or remove a selected manual cut |
 | `I` `O` | Mark a manual cut in / out |
 | `,` `.` | Frame step |
-| `E` | Export clean copy |
-| Scroll | Zoom timeline |
+| `E` | Export |
+| Scroll | Zoom or pan the timeline |
 
-## How it works
+## Export behavior
 
-- **Detection** — ffmpeg’s EBU R128 meter samples momentary loudness every 100 ms. A candidate fires when it jumps **8–16 LU** (by sensitivity) above a rolling **20-second** baseline, so steady-loud action scenes don’t trigger it.
-- **Preview** — a 540p hardware-encoded proxy is generated on import so scrubbing is instant in the webview. Analysis, keyframes, and the proxy are cached per file.
-- **Export** — ffmpeg concat demuxer with `-c copy`. Keep-segment starts snap **forward** to the next keyframe, so a cut only ever removes slightly more than marked — scary frames never leak back in.
+Video is stream-copied, and retained sections begin at safe keyframes so frames
+from a removed range do not leak back into the result.
 
-## Stack
+- With cuts only, video, audio, and compatible subtitle streams are copied
+  without re-encoding.
+- If any mute is used, video and subtitles are still copied, but audio is
+  re-encoded to AAC so the selected ranges can be silenced.
 
-| Layer | Tech |
-| --- | --- |
-| Shell | [Tauri 2](https://tauri.app) (Rust) |
-| UI | React 19 · TypeScript · Tailwind CSS v4 · Zustand |
-| Media | ffmpeg / ffprobe (external) |
+## Important limitations
 
-## Project layout
+Videofy is a review accelerator, not a child-safety certification. Automated
+models can miss unsuitable content and can flag harmless scenes. Visual
+heuristics are deliberately low-confidence review clues. Subtitle wording,
+alternate cuts, logos, frame rates, and regional editions can shift imported
+timestamps, so imported ranges must be reviewed.
 
-```
-videofy/
-├── src/                 # React frontend
-│   ├── components/      # Editor, player, timeline, panels
-│   ├── hooks/           # Keyboard shortcuts
-│   └── store.ts         # App state (Zustand)
-├── src-tauri/           # Rust / Tauri backend
-│   └── src/             # Probe, analysis, proxy, waveform, export
-├── package.json
-└── README.md
-```
+The automatic guide alignment currently estimates a single timeline offset
+from matching jump-scare impacts. The manual offset remains available when
+there are too few reliable anchors or the edition differs more substantially.
 
 ## Privacy
 
-Videofy runs entirely on your machine. Media is processed locally via ffmpeg; nothing is uploaded.
+Movie frames, audio, subtitles, and transcripts are processed on the machine.
+The app makes network requests only to download its model files and, when the
+user explicitly requests a guide lookup, to send the entered title/year to
+Does the Dog Die?.
 
-## Contributing
+The Does the Dog Die? API key is stored in the app webview’s local storage. No
+movie media is uploaded by Videofy.
 
-Issues and pull requests are welcome. For larger changes, open an issue first so we can align on approach.
+## Stack
+
+| Layer | Technology |
+| --- | --- |
+| Desktop shell | Tauri 2 / Rust |
+| UI | React 19, TypeScript, Tailwind CSS 4, Zustand |
+| Media | ffmpeg / ffprobe |
+| Speech | whisper.cpp through `whisper-rs` |
+| Semantic audio | YAMNet ONNX through ONNX Runtime |
 
 ## License
 
-[MIT](LICENSE) — free to use, modify, and redistribute, including commercially. Attribution required.
+[MIT](LICENSE)

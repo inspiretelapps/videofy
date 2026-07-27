@@ -1,4 +1,4 @@
-use crate::media;
+use crate::{media, probe};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use tauri::Emitter;
@@ -25,7 +25,10 @@ pub async fn get_waveform(
     duration: f64,
 ) -> Result<Waveform, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let cache = media::cache_dir_for(&app, &path)?.join("waveform.json");
+        let info = probe::probe_sync(&path)?;
+        let audio_stream = probe::preferred_audio_stream(&info).ok_or("no audio track found")?;
+        let cache =
+            media::cache_dir_for(&app, &path)?.join(format!("waveform-v2-{audio_stream}.json"));
         let _guard = media::JobGuard::acquire(format!("waveform:{}", cache.display()))?;
         if let Ok(bytes) = std::fs::read(&cache) {
             if let Ok(wf) = serde_json::from_slice::<Waveform>(&bytes) {
@@ -37,17 +40,28 @@ pub async fn get_waveform(
 
         let ffmpeg = media::ffmpeg_path();
         let rate = SAMPLE_RATE.to_string();
+        let audio_map = format!("0:{audio_stream}");
         let mut child = media::spawn(
             &ffmpeg,
             &[
-                "-v", "error", "-nostats",
-                "-i", &path,
-                "-map", "0:a:0",
-                "-vn", "-sn", "-dn",
-                "-ac", "2",
-                "-ar", &rate,
-                "-c:a", "pcm_s16le",
-                "-f", "s16le",
+                "-v",
+                "error",
+                "-nostats",
+                "-i",
+                &path,
+                "-map",
+                &audio_map,
+                "-vn",
+                "-sn",
+                "-dn",
+                "-ac",
+                "2",
+                "-ar",
+                &rate,
+                "-c:a",
+                "pcm_s16le",
+                "-f",
+                "s16le",
                 "-",
             ],
         )?;
@@ -96,8 +110,15 @@ pub async fn get_waveform(
             if frames_since_emit >= SAMPLE_RATE as u64 * 10 {
                 frames_since_emit = 0;
                 let t = total_frames as f64 / SAMPLE_RATE as f64;
-                let pct = if duration > 0.0 { (t / duration * 100.0).min(100.0) } else { 0.0 };
-                let _ = app.emit("waveform-progress", serde_json::json!({ "t": t, "pct": pct }));
+                let pct = if duration > 0.0 {
+                    (t / duration * 100.0).min(100.0)
+                } else {
+                    0.0
+                };
+                let _ = app.emit(
+                    "waveform-progress",
+                    serde_json::json!({ "t": t, "pct": pct }),
+                );
             }
         }
         if frames_in_bucket > 0 {
@@ -109,7 +130,10 @@ pub async fn get_waveform(
             return Err("waveform extraction produced no audio data".into());
         }
         let _ = std::fs::write(&cache, serde_json::to_vec(&wf).unwrap_or_default());
-        let _ = app.emit("waveform-progress", serde_json::json!({ "t": duration, "pct": 100.0 }));
+        let _ = app.emit(
+            "waveform-progress",
+            serde_json::json!({ "t": duration, "pct": 100.0 }),
+        );
         Ok(wf)
     })
     .await
