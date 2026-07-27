@@ -15,8 +15,7 @@ observation:
 | --- | --- |
 | `src-tauri/src/audio_events.rs` | YAMNet risk thresholds, 0.40–0.65 |
 | `src-tauri/src/text_analysis.rs` | rule confidences 0.25–0.72, floor 0.24 |
-| `src-tauri/src/scene_analysis.rs` | red 0.095, skin 0.43, dark 0.86 |
-| all three | padding constants that decide how wide each event is |
+| both | padding constants that decide how wide each event is |
 
 None has ever been compared against a real film with the unsuitable ranges
 marked by hand. So changing a threshold today only swaps one guess for another,
@@ -36,15 +35,14 @@ section is the important one.
 ## The technique that improves both at once
 
 Each detector currently fires independently, so what reaches the review list is
-the *union* of five sources' noise. Five mediocre detectors produce five times
-the false positives of one.
+the union of several sources' noise.
 
 Stop treating them as equals:
 
 - **High-precision sources fire alone.** An SDH caption reading `[GUNSHOTS]`, or
   a human-curated guide timestamp, is trustworthy by itself.
-- **Weak sources require corroboration.** A dark frame, a loudness jump, a lone
-  YAMNet "Screaming" at 0.4 — none should raise a card on its own. Two of them
+- **Weak sources require corroboration.** A loudness jump or a lone YAMNet
+  "Screaming" at 0.4 should not raise a card on its own. Independent sources
   agreeing at the same moment should.
 
 That allows the weak detectors to be set *sensitively* — good recall — without
@@ -87,11 +85,7 @@ Repeat per source. Roughly ten minutes a cycle once the annotations exist.
 2. **Text rule confidences.** Currently guessed. The annotations show which
    phrases actually predict content; the lexicon is a data table, so it is
    editable without touching logic.
-3. **The visual pass.** Genuinely the weakest link — colour fractions cannot
-   distinguish blood from a sunset, and because they *gate* the pipeline,
-   nothing downstream can ever see what they miss. Probably should be
-   corroboration-only until replaced.
-4. **Per-category thresholds.** The cost of a miss is not uniform. A missed
+3. **Per-category thresholds.** The cost of a miss is not uniform. A missed
    swear word is mild; a missed on-screen death is not. Severity should raise or
    lower the bar for surfacing.
 

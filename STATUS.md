@@ -9,8 +9,11 @@ it), `benchmark/README.md` (how to run the calibration harness),
 
 ## Where things stand
 
-All work is committed and pushed to `main`. 34 Rust tests pass, `tsc` is clean,
-`npm run build` is clean, and the app is installed at `/Applications/Videofy.app`.
+The last committed baseline is pushed to `main`. The current workspace adds a
+Quick manual edit option and removes the low-quality Picture detector. The
+current production bundle is installed at `/Applications/Videofy.app`. The
+workspace passes all 33 Rust tests, `cargo check`, `npm run build`, strict
+macOS bundle-signature verification, and an installed-app launch smoke test.
 
 Six commits since the last release point:
 
@@ -53,6 +56,13 @@ cross-origin media in Safari, and the video is served from `asset.localhost`
 while the page runs on `tauri.localhost`. That was tried and reverted.
 
 ## Known open items
+
+**Does the Dog Die? access is working, but the current key is Free-tier.**
+Authenticated lookups correctly matched Moana (2016) and Moana 2 (2024) and
+returned whole-film topic statistics. The `/ratings` endpoint returned 403 for
+both, so this key cannot retrieve community timestamps or professional Scene
+Alerts. The app should continue treating this as an optional guide source;
+timestamped use requires Startup or Pro API access.
 
 **Detection accuracy — the big one.** Every threshold is still a principled
 guess. Nothing has been run against a real annotated movie. This blocks any

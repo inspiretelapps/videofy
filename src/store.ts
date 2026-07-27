@@ -14,7 +14,6 @@ import type {
   ManualCut,
   ProfanityTier,
   ScanState,
-  SceneAnalysisResult,
   Selection,
   TextAnalysisResult,
   VideoInfo,
@@ -99,7 +98,6 @@ interface State {
   scans: {
     text: ScanState;
     audio: ScanState;
-    vision: ScanState;
     guide: ScanState;
   };
 
@@ -113,6 +111,7 @@ interface State {
   categories: ContentCategory[];
   checkedIds: string[];
   showDetections: boolean;
+  skipDetection: boolean;
 
   playhead: number;
   shuttle: number;
@@ -144,6 +143,7 @@ interface State {
   toggleChecked: (id: string) => void;
   clearChecked: () => void;
   toggleDetections: () => void;
+  setSkipDetection: (skip: boolean) => void;
   setPendingIn: (time: number | null) => void;
   commitOut: (time: number) => void;
   removeManualCut: (id: number) => void;
@@ -196,7 +196,6 @@ export const useStore = create<State>()((set, get) => ({
   scans: {
     text: idleScan("Waiting"),
     audio: idleScan("Waiting"),
-    vision: idleScan("Waiting"),
     guide: idleScan("Optional"),
   },
   eventStatus: {},
@@ -209,6 +208,7 @@ export const useStore = create<State>()((set, get) => ({
   categories: [...ALL_CATEGORIES],
   checkedIds: [],
   showDetections: true,
+  skipDetection: false,
   playhead: 0,
   shuttle: 0,
   seekReq: { t: 0, n: 0 },
@@ -221,6 +221,7 @@ export const useStore = create<State>()((set, get) => ({
 
   openFile: async (path) => {
     if (get().stage === "importing") return;
+    const skipDetection = get().skipDetection;
     attachListeners(set, get);
     set({
       stage: "importing",
@@ -234,9 +235,8 @@ export const useStore = create<State>()((set, get) => ({
       eventStatus: {},
       manualCuts: [],
       scans: {
-        text: idleScan("Waiting"),
-        audio: idleScan("Waiting"),
-        vision: idleScan("Waiting"),
+        text: idleScan(skipDetection ? "Skipped · manual edit" : "Waiting"),
+        audio: idleScan(skipDetection ? "Skipped · manual edit" : "Waiting"),
         guide: idleScan("Optional"),
       },
     });
@@ -259,14 +259,16 @@ export const useStore = create<State>()((set, get) => ({
         sourceHeight: info.height,
       });
       const keyframesP = invoke<number[]>("get_keyframes", { path });
-      const loudnessP = invoke<AnalysisResult>("analyze_audio", {
-        path,
-        duration: info.duration,
-        sensitivity: SENSITIVITY_VALUE[get().sensitivity],
-      }).catch((error) => {
-        set({ analysisError: String(error) });
-        return null;
-      });
+      const loudnessP = skipDetection
+        ? Promise.resolve<AnalysisResult | null>(null)
+        : invoke<AnalysisResult>("analyze_audio", {
+            path,
+            duration: info.duration,
+            sensitivity: SENSITIVITY_VALUE[get().sensitivity],
+          }).catch((error) => {
+            set({ analysisError: String(error) });
+            return null;
+          });
       const waveformP = invoke<WaveformData>("get_waveform", {
         path,
         duration: info.duration,
@@ -300,7 +302,7 @@ export const useStore = create<State>()((set, get) => ({
         shuttle: 0,
         view: { t0: 0, t1: info.duration },
       });
-      void get().runDeepScan();
+      if (!skipDetection) void get().runDeepScan();
     } catch (error) {
       set({ stage: "welcome", importError: String(error), info: null });
     }
@@ -314,17 +316,16 @@ export const useStore = create<State>()((set, get) => ({
         ...state.scans,
         text: idleScan("Queued"),
         audio: idleScan("Queued"),
-        vision: idleScan("Queued"),
       },
     }));
 
-    const begin = (key: "text" | "audio" | "vision", detail: string) =>
+    const begin = (key: "text" | "audio", detail: string) =>
       set((state) => ({
         scans: { ...state.scans, [key]: { ...idleScan(detail), running: true } },
       }));
 
     const addResult = (
-      key: "text" | "audio" | "vision",
+      key: "text" | "audio",
       result: { events: ContentEvent[]; warnings: string[] },
       detail: string,
     ) => {
@@ -354,7 +355,7 @@ export const useStore = create<State>()((set, get) => ({
       }));
       scheduleProjectSave(get);
     };
-    const fail = (key: "text" | "audio" | "vision", error: unknown) => {
+    const fail = (key: "text" | "audio", error: unknown) => {
       if (get().info?.path !== info.path) return;
       set((state) => ({
         scans: {
@@ -399,22 +400,6 @@ export const useStore = create<State>()((set, get) => ({
       addResult("audio", result, `${result.events.length} semantic sound clues`);
     } catch (error) {
       fail("audio", error);
-    }
-    if (!stillCurrent()) return;
-
-    try {
-      begin("vision", "Scanning scene changes");
-      const result = await invoke<SceneAnalysisResult>("analyze_scenes", {
-        path: info.path,
-        duration: info.duration,
-      });
-      addResult(
-        "vision",
-        result,
-        `${result.framesScanned || "cached"} scene frames · ${result.verifier}`,
-      );
-    } catch (error) {
-      fail("vision", error);
     }
   },
 
@@ -523,6 +508,7 @@ export const useStore = create<State>()((set, get) => ({
       selection: showing && get().selection?.kind === "event" ? null : get().selection,
     });
   },
+  setSkipDetection: (skipDetection) => set({ skipDetection }),
   setPendingIn: (time) => set({ pendingIn: time }),
   commitOut: (time) => {
     const { pendingIn, manualCuts, nextManualId } = get();
@@ -790,7 +776,7 @@ function attachListeners(
   );
   const scanProgress = (
     eventName: string,
-    key: "text" | "audio" | "vision",
+    key: "text" | "audio",
   ) =>
     listen<{ pct: number }>(eventName, (event) =>
       set((state) => ({
@@ -804,7 +790,6 @@ function attachListeners(
   void scanProgress("whisper-model-download", "text");
   void scanProgress("audio-events-progress", "audio");
   void scanProgress("audio-model-download", "audio");
-  void scanProgress("scene-analysis-progress", "vision");
   void listen<{ pct: number }>("export-progress", (event) => {
     const exporting = get().exporting;
     if (exporting?.running)

@@ -9,7 +9,7 @@
 //!
 //!     --annotations FILE   score detections against hand-annotated ranges
 //!     --json FILE          write the full report as JSON
-//!     --skip LIST          comma-separated: loudness,text,audio,vision
+//!     --skip LIST          comma-separated: loudness,text,audio
 //!     --labels N           show the top N YAMNet labels (default 25)
 //!     --profanity TIER     off|strong|medium|mild (default medium)
 //!     --no-verify          skip Whisper confirmation of subtitle mute timing
@@ -26,7 +26,7 @@ use std::time::Instant;
 use videofy_lib::content::ContentEvent;
 use videofy_lib::media::HeadlessHost;
 use videofy_lib::text_analysis::ProfanityTier;
-use videofy_lib::{analysis, audio_events, probe, scene_analysis, text_analysis};
+use videofy_lib::{analysis, audio_events, probe, text_analysis};
 
 #[derive(Deserialize)]
 struct Annotations {
@@ -410,34 +410,6 @@ fn run() -> Result<(), String> {
             }
             Err(error) => sources.push(summarize(
                 "audio (YAMNet)",
-                &[],
-                duration,
-                started.elapsed().as_secs_f64(),
-                vec![error],
-            )),
-        }
-        if !quiet {
-            eprintln!();
-        }
-    }
-
-    if running("vision") {
-        let started = Instant::now();
-        match scene_analysis::analyze_with_host(&host, &movie, duration) {
-            Ok(result) => {
-                let mut warnings = result.warnings.clone();
-                warnings.push(format!("{} scene frames inspected", result.frames_scanned));
-                sources.push(summarize(
-                    "vision",
-                    &result.events,
-                    duration,
-                    started.elapsed().as_secs_f64(),
-                    warnings,
-                ));
-                all_events.extend(result.events);
-            }
-            Err(error) => sources.push(summarize(
-                "vision",
                 &[],
                 duration,
                 started.elapsed().as_secs_f64(),

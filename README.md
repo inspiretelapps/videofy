@@ -8,8 +8,7 @@ moments, explains why each moment was flagged, and lets you mark it as
 
 It does not treat loudness as proof that a scene is scary. Loudness is now one
 weak clue in a hybrid scan that also examines text, semantic sound events,
-representative scene frames, accessibility tracks, and optional human guide
-timestamps.
+accessibility tracks, and optional human guide timestamps.
 
 ## What the scanner checks
 
@@ -19,7 +18,6 @@ timestamps.
 | Audio description | Narrated visual actions that ordinary subtitles can miss |
 | Local Whisper fallback | English dialogue when usable text subtitles are unavailable; includes word-level timing for short profanity mutes |
 | YAMNet sound classifier | Screams, crying, growls, gunshots, explosions, breaking glass, crashes, and similar semantic sound clues |
-| Scene scan | Frames at scene changes, checked for conservative visual risk clues |
 | Does the Dog Die? | Optional human-written timestamped ratings and Scene Alerts, depending on the API tier |
 | SRT / VTT / SKP import | Published or hand-authored timing ranges, with a manual offset and conservative automatic jump-scare alignment |
 | Loudness | Low-confidence sudden-impact evidence only |
@@ -107,8 +105,8 @@ cargo test
 ## Usage
 
 1. Drop a movie onto the window or choose a file.
-2. Start reviewing when the editor opens; Text, Sound, and Picture results will
-   continue to appear in the coverage panel.
+2. Start reviewing when the editor opens; Text and Sound results will continue
+   to appear in the coverage panel.
 3. Expand an event to see why it was flagged.
 4. Choose **Cut**, **Mute**, or **Keep**, and add manual IN/OUT cuts where
    required.
@@ -143,10 +141,9 @@ from a removed range do not leak back into the result.
 ## Important limitations
 
 Videofy is a review accelerator, not a child-safety certification. Automated
-models can miss unsuitable content and can flag harmless scenes. Visual
-heuristics are deliberately low-confidence review clues. Subtitle wording,
-alternate cuts, logos, frame rates, and regional editions can shift imported
-timestamps, so imported ranges must be reviewed.
+models can miss unsuitable content and can flag harmless scenes. Subtitle
+wording, alternate cuts, logos, frame rates, and regional editions can shift
+imported timestamps, so imported ranges must be reviewed.
 
 The automatic guide alignment currently estimates a single timeline offset
 from matching jump-scare impacts. The manual offset remains available when

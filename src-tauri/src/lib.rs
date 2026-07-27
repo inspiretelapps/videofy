@@ -6,7 +6,6 @@ pub mod guides;
 pub mod media;
 pub mod probe;
 pub mod proxy;
-pub mod scene_analysis;
 pub mod text_analysis;
 pub mod waveform;
 
@@ -24,7 +23,6 @@ pub fn run() {
             guides::lookup_content_guide,
             text_analysis::analyze_text,
             proxy::generate_proxy,
-            scene_analysis::analyze_scenes,
             export::export_video,
             waveform::get_waveform,
         ])

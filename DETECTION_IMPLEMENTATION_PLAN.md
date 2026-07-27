@@ -4,6 +4,11 @@ Written: 2026-07-26
 Supersedes the "recommended continuation order" in `DETECTION_REVIEW_HANDOFF.md` §12.
 Companion to that document; it remains the record of *why* the architecture looks like this.
 
+> Update 2026-07-27: the built-in colour-based Picture detector was removed
+> after real-film caches showed that it generated most candidates while adding
+> little trustworthy information. References to the visual pass below are
+> retained as historical planning context, not current implementation.
+
 ## 0. Decision and its consequences
 
 **Decision: no local LLM.** The Ollama vision-verifier path is cut. A 4B-class VLM would need

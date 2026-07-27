@@ -28,7 +28,7 @@ cargo run --release --bin scan_report -- "/path/to/Movie.mkv" \
 
 Useful flags:
 
-- `--skip loudness,text,audio,vision` — omit passes while iterating on one
+- `--skip loudness,text,audio` — omit passes while iterating on one
 - `--labels 60` — show more of the YAMNet score histogram
 - `--quiet` — no per-pass progress
 - `--profanity off|strong|medium|mild` — which language tier to mute (default

@@ -83,13 +83,6 @@ export interface AudioEventResult {
   warnings: string[];
 }
 
-export interface SceneAnalysisResult {
-  events: ContentEvent[];
-  framesScanned: number;
-  verifier: string;
-  warnings: string[];
-}
-
 export interface GuideResult {
   provider: string;
   title: string | null;

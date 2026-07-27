@@ -2,6 +2,11 @@
 
 Date: 2026-07-26
 
+> Update 2026-07-27: the built-in Picture pass described below was removed.
+> Its colour/brightness heuristics generated most candidates in real films but
+> could not identify semantic content reliably. This document otherwise
+> remains the historical record of the original overhaul.
+
 ## Outcome
 
 Videofy has been changed from a loudness-based jump-scare detector into a
@@ -17,7 +22,6 @@ The implemented system now combines:
 - Audio-description tracks
 - Local Whisper speech transcription when timed text is unavailable
 - YAMNet semantic sound-event classification
-- Scene-change frame sampling with conservative built-in visual heuristics
 - Does the Dog Die? timestamped guide data
 - Imported SRT, VTT, and SKP timing files
 - The original sudden-loudness detector as supporting evidence
@@ -38,9 +42,6 @@ There is:
 - No image-to-base64 Ollama payload
 - No Ollama request or response types in the Rust backend
 - No direct `base64` dependency for that integration
-
-The Picture pass remains a deliberately low-confidence candidate generator. It
-does not claim to understand the semantic meaning of a frame.
 
 ## 1. Unified content-event model
 
@@ -223,37 +224,13 @@ Implementation details:
 YAMNet findings default to **Review**. A sound label alone is not treated as
 proof that the scene is unsuitable.
 
-## 6. Scene-based visual candidate scan
-
-Added `src-tauri/src/scene_analysis.rs`.
-
-The Picture pass:
-
-- Uses FFmpeg scene-change detection
-- Always includes the first frame
-- Extracts 320-pixel-wide JPEG review frames
-- Uses FFmpeg `showinfo` timestamps rather than image filename PTS assumptions
-- Samples pixel statistics from each selected frame
-- Emits progress to the UI
-- Removes temporary frames after analysis
-- Caches final visual events
-
-The built-in heuristics create low-confidence review clues for:
-
-- Strong red regions that may indicate blood, fire, or violent imagery
-- Large skin-like regions that may indicate nudity
-- Very dark scenes with red contrast that may be frightening
-
-These checks will produce false positives. They are intentionally labeled as
-possible content and default to **Review**.
-
 ## Review interface
 
 `src/components/SegmentsPanel.tsx` has been rebuilt around content events.
 
 It now includes:
 
-- Text, Sound, Picture, and Guide coverage indicators
+- Text, Sound, and Guide coverage indicators
 - Progressive scan progress and error reporting
 - Category filters
 - Minimum severity filter
@@ -341,7 +318,6 @@ scan requests cannot race on the same model or cache output.
 - `src-tauri/src/text_analysis.rs`
 - `src-tauri/src/guides.rs`
 - `src-tauri/src/audio_events.rs`
-- `src-tauri/src/scene_analysis.rs`
 - `DETECTION_IMPLEMENTATION_SUMMARY.md`
 
 ## Main files substantially changed
@@ -378,7 +354,6 @@ The tests cover:
 - Profanity mute timing
 - Whisper word-timing preference
 - Guide/SKP parsing and offsets
-- Scene timestamp parsing
 - Cut planning
 - Mute remapping after cuts
 
@@ -402,7 +377,6 @@ Important limitations:
 - Whisper is currently English-only
 - Keyword rules cannot understand every context
 - YAMNet identifies sounds, not the meaning of the surrounding scene
-- The visual scan is heuristic and low-confidence
 - Subtitles do not describe all visual content
 - Audio-description tracks are not available in every file
 - Does the Dog Die? exact timestamps depend on API tier and title coverage

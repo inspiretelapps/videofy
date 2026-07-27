@@ -125,7 +125,6 @@ export default function SegmentsPanel() {
           <div className="mt-1.5 grid grid-cols-2 gap-1.5">
             <ScanChip label="Text" scan={scans.text} />
             <ScanChip label="Sound" scan={scans.audio} />
-            <ScanChip label="Picture" scan={scans.vision} />
             <ScanChip label="Guide" scan={scans.guide} />
           </div>
         )}
