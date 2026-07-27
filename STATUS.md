@@ -2,9 +2,10 @@
 
 Last updated: 2026-07-27. Read this first when picking the project back up.
 
-Companion documents: `DETECTION_IMPLEMENTATION_PLAN.md` (the plan, now partly
-delivered — see below), `DETECTION_IMPLEMENTATION_SUMMARY.md` (what the
-detection overhaul contains), `benchmark/README.md` (how to calibrate).
+Companion documents: `ACCURACY.md` (why the detectors are noisy and how to fix
+it), `benchmark/README.md` (how to run the calibration harness),
+`DETECTION_IMPLEMENTATION_PLAN.md` (the plan, now partly delivered — see below),
+`DETECTION_IMPLEMENTATION_SUMMARY.md` (what the detection overhaul contains).
 
 ## Where things stand
 
@@ -56,7 +57,8 @@ while the page runs on `tauri.localhost`. That was tried and reverted.
 **Detection accuracy — the big one.** Every threshold is still a principled
 guess. Nothing has been run against a real annotated movie. This blocks any
 honest tuning, and it is the user-visible complaint ("picking up way too
-much"). See `benchmark/README.md`; the loop is:
+much"). `ACCURACY.md` explains the approach; `benchmark/README.md` covers the
+mechanics. The loop is:
 
 ```sh
 cd src-tauri
