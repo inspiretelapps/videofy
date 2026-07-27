@@ -9,11 +9,13 @@ it), `benchmark/README.md` (how to run the calibration harness),
 
 ## Where things stand
 
-The last committed baseline is pushed to `main`. The current workspace adds a
-Quick manual edit option and removes the low-quality Picture detector. The
-current production bundle is installed at `/Applications/Videofy.app`. The
-workspace passes all 33 Rust tests, `cargo check`, `npm run build`, strict
-macOS bundle-signature verification, and an installed-app launch smoke test.
+Commit `d248cec` is pushed to `main`; it adds Quick manual edit and removes the
+low-quality Picture detector. The current workspace adds local-first external
+subtitle support: attach a subtitle while opening a movie, or let the scanner
+find a safely matching English sidecar file beside it. Online subtitle lookup
+is deliberately not part of the automatic scan. The workspace passes all 35
+Rust tests and the frontend/production builds; the signed bundle is installed
+and launch-checked at `/Applications/Videofy.app`.
 
 Six commits since the last release point:
 

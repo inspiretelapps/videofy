@@ -5,6 +5,7 @@ use crate::media::ScanHost;
 use crate::{media, probe};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use whisper_rs::{
     DtwMode, DtwModelPreset, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
 };
@@ -415,11 +416,19 @@ pub async fn analyze_text(
     duration: f64,
     profanity_tier: Option<ProfanityTier>,
     verify_mutes: Option<bool>,
+    subtitle_path: Option<String>,
 ) -> Result<TextAnalysisResult, String> {
     let tier = profanity_tier.unwrap_or_default();
     let verify = verify_mutes.unwrap_or(true);
     tauri::async_runtime::spawn_blocking(move || {
-        analyze_with_host(&app, &path, duration, tier, verify)
+        analyze_with_host_and_subtitle(
+            &app,
+            &path,
+            duration,
+            tier,
+            verify,
+            subtitle_path.as_deref(),
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -432,16 +441,54 @@ pub fn analyze_with_host(
     profanity_tier: ProfanityTier,
     verify_mutes: bool,
 ) -> Result<TextAnalysisResult, String> {
+    analyze_with_host_and_subtitle(host, path, duration, profanity_tier, verify_mutes, None)
+}
+
+fn analyze_with_host_and_subtitle(
+    host: &dyn ScanHost,
+    path: &str,
+    duration: f64,
+    profanity_tier: ProfanityTier,
+    verify_mutes: bool,
+    subtitle_path: Option<&str>,
+) -> Result<TextAnalysisResult, String> {
     let scan_dir = media::cache_dir_for(host, path)?;
     let _guard = media::JobGuard::acquire(format!("text-analysis:{}", scan_dir.display()))?;
     let info = probe::probe_sync(path)?;
     let mut warnings = Vec::new();
     let mut cues = Vec::new();
+    let mut subtitle_source = None;
+
+    if let Some(attached) = subtitle_path.filter(|value| !value.trim().is_empty()) {
+        let attached = PathBuf::from(attached);
+        match extract_external_subtitle_cues(&attached) {
+            Ok(extracted) if !extracted.is_empty() => {
+                cues.extend(extracted);
+                subtitle_source = Some("attached subtitles".to_string());
+            }
+            Ok(_) => warnings.push(format!("{} was empty.", attached.to_string_lossy())),
+            Err(err) => warnings.push(format!(
+                "Could not read attached subtitle {}: {err}",
+                attached.to_string_lossy()
+            )),
+        }
+    }
 
     let mut subtitle_tracks: Vec<_> = info
         .tracks
         .iter()
-        .filter(|t| t.kind == "subtitle" && t.is_text)
+        .filter(|t| {
+            t.kind == "subtitle"
+                && t.is_text
+                && !t.is_forced
+                && matches!(
+                    t.language
+                        .as_deref()
+                        .map(str::to_ascii_lowercase)
+                        .as_deref(),
+                    Some("eng") | Some("en") | Some("english") | Some("und") | None
+                )
+        })
         .collect();
     subtitle_tracks.sort_by_key(|t| {
         let language_rank = match t.language.as_deref() {
@@ -454,13 +501,46 @@ pub fn analyze_with_host(
         (language_rank, accessibility_rank, default_rank)
     });
 
-    if let Some(track) = subtitle_tracks.first() {
-        match extract_subtitle_cues(path, track.stream_index) {
-            Ok(extracted) => cues.extend(extracted),
-            Err(err) => warnings.push(format!("Subtitle extraction failed: {err}")),
+    if cues.is_empty() {
+        if let Some(track) = subtitle_tracks.first() {
+            match extract_subtitle_cues(path, track.stream_index) {
+                Ok(extracted) if !extracted.is_empty() => {
+                    cues.extend(extracted);
+                    subtitle_source = Some(if track.is_hearing_impaired {
+                        "embedded SDH subtitles".to_string()
+                    } else {
+                        "embedded subtitles".to_string()
+                    });
+                }
+                Ok(_) => warnings.push("The embedded subtitle track was empty.".to_string()),
+                Err(err) => warnings.push(format!("Subtitle extraction failed: {err}")),
+            }
         }
-    } else {
-        warnings.push("No usable text subtitle/SDH track was found.".to_string());
+    }
+
+    if cues.is_empty() {
+        let candidates = external_subtitle_candidates(path);
+        for candidate in candidates {
+            match extract_external_subtitle_cues(&candidate.path) {
+                Ok(extracted) if !extracted.is_empty() => {
+                    cues.extend(extracted);
+                    subtitle_source = Some(candidate.label);
+                    break;
+                }
+                Ok(_) => warnings.push(format!("{} was empty.", candidate.path.to_string_lossy())),
+                Err(err) => warnings.push(format!(
+                    "Could not read {}: {err}",
+                    candidate.path.to_string_lossy()
+                )),
+            }
+        }
+    }
+
+    if cues.is_empty() {
+        warnings.push(
+            "No usable English subtitle/SDH track or matching local subtitle file was found."
+                .to_string(),
+        );
     }
 
     let ad_track = info.tracks.iter().find(|track| {
@@ -506,15 +586,17 @@ pub fn analyze_with_host(
 
     let cue_count = cues.len();
     let source = if cues.iter().any(|c| c.source == "audio-description") {
-        "subtitles + audio description"
-    } else if cues.iter().any(|c| c.source == "subtitle") {
-        "subtitles"
+        match subtitle_source {
+            Some(source) => format!("{source} + audio description"),
+            None => "audio description".to_string(),
+        }
+    } else if let Some(source) = subtitle_source {
+        source
     } else if cues.iter().any(|c| c.source == "transcript") {
-        "speech transcript"
+        "speech transcript".to_string()
     } else {
-        "none"
-    }
-    .to_string();
+        "none".to_string()
+    };
     let mut events: Vec<ContentEvent> = cues
         .iter()
         .flat_map(|cue| events_from_cue(cue, profanity_tier))
@@ -550,6 +632,140 @@ pub fn analyze_with_host(
         cue_count,
         warnings,
     })
+}
+
+const SUBTITLE_EXTENSIONS: &[&str] = &["srt", "vtt", "ass", "ssa"];
+
+struct SubtitleCandidate {
+    path: PathBuf,
+    label: String,
+    score: u16,
+}
+
+fn external_subtitle_candidates(movie_path: &str) -> Vec<SubtitleCandidate> {
+    let mut candidates = Vec::new();
+    let movie = Path::new(movie_path);
+    let Some(parent) = movie.parent() else {
+        return candidates;
+    };
+    let Some(movie_stem) = movie.file_stem().and_then(|value| value.to_str()) else {
+        return candidates;
+    };
+    let search_dirs = [
+        parent.to_path_buf(),
+        parent.join("Subs"),
+        parent.join("Subtitles"),
+        parent.join("subs"),
+        parent.join("subtitles"),
+    ];
+    for directory in search_dirs {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file()
+                || !path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .map(|value| {
+                        SUBTITLE_EXTENSIONS
+                            .iter()
+                            .any(|extension| value.eq_ignore_ascii_case(extension))
+                    })
+                    .unwrap_or(false)
+            {
+                continue;
+            }
+            if candidates.iter().any(|candidate| candidate.path == path) {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if let Some(score) = sidecar_name_score(movie_stem, stem) {
+                candidates.push(SubtitleCandidate {
+                    path,
+                    label: "matching local subtitle file".to_string(),
+                    score,
+                });
+            }
+        }
+    }
+    candidates.sort_by(|a, b| b.score.cmp(&a.score));
+    candidates
+}
+
+fn sidecar_name_score(movie_stem: &str, subtitle_stem: &str) -> Option<u16> {
+    let movie = movie_stem.to_ascii_lowercase();
+    let subtitle = subtitle_stem.to_ascii_lowercase();
+    if subtitle == movie {
+        return Some(200);
+    }
+    let suffix = subtitle.strip_prefix(&movie)?;
+    if suffix.is_empty() {
+        return Some(200);
+    }
+    if !suffix.starts_with(['.', ' ', '_', '-']) {
+        return None;
+    }
+    let tokens: Vec<_> = suffix
+        .split(['.', ' ', '_', '-'])
+        .filter(|value| !value.is_empty())
+        .collect();
+    if tokens.is_empty()
+        || tokens.iter().any(|token| {
+            !matches!(
+                *token,
+                "en" | "eng"
+                    | "english"
+                    | "sdh"
+                    | "cc"
+                    | "hi"
+                    | "hearing"
+                    | "impaired"
+                    | "subtitle"
+                    | "subtitles"
+                    | "full"
+            )
+        })
+    {
+        return None;
+    }
+    let accessibility_bonus = if tokens
+        .iter()
+        .any(|token| matches!(*token, "sdh" | "cc" | "hi" | "hearing" | "impaired"))
+    {
+        30
+    } else {
+        0
+    };
+    Some(190 + accessibility_bonus)
+}
+
+fn extract_external_subtitle_cues(path: &Path) -> Result<Vec<Cue>, String> {
+    let path_text = path
+        .to_str()
+        .ok_or("Subtitle path contains unsupported characters")?;
+    if !path.is_file() {
+        return Err("the selected subtitle file no longer exists".to_string());
+    }
+    let ffmpeg = media::ffmpeg_path();
+    let mut child = media::spawn(
+        &ffmpeg,
+        &["-v", "error", "-nostats", "-i", path_text, "-f", "srt", "-"],
+    )?;
+    let stderr_drain = media::drain_stderr(&mut child);
+    let mut bytes = Vec::new();
+    child
+        .stdout
+        .take()
+        .ok_or("ffmpeg produced no subtitle output")?
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    media::wait_checked(child, "external subtitle extraction", stderr_drain)?;
+    let text = String::from_utf8_lossy(&bytes);
+    Ok(parse_srt(&text, "subtitle"))
 }
 
 fn extract_subtitle_cues(path: &str, stream_index: u32) -> Result<Vec<Cue>, String> {
@@ -1620,5 +1836,38 @@ mod tests {
             .unwrap();
         assert!((event.start - 13.28).abs() < 0.001);
         assert!((event.end - 14.02).abs() < 0.001);
+    }
+
+    #[test]
+    fn sidecar_search_accepts_only_safe_matching_names() {
+        assert_eq!(
+            sidecar_name_score("Moana.2016.1080p", "Moana.2016.1080p"),
+            Some(200)
+        );
+        assert_eq!(
+            sidecar_name_score("Moana.2016.1080p", "Moana.2016.1080p.en.sdh"),
+            Some(220)
+        );
+        assert_eq!(
+            sidecar_name_score("Moana.2016.1080p", "Moana.2016.1080p.eng"),
+            Some(190)
+        );
+        assert_eq!(
+            sidecar_name_score("Moana.2016.1080p", "Moana.2016.1080p.fr"),
+            None
+        );
+        assert_eq!(
+            sidecar_name_score("Moana.2016.1080p", "Different.Movie.english"),
+            None
+        );
+    }
+
+    #[test]
+    fn sidecar_search_rejects_forced_only_subtitles() {
+        assert_eq!(
+            sidecar_name_score("Movie", "Movie.en.forced"),
+            None,
+            "forced-only tracks do not contain the full dialogue"
+        );
     }
 }

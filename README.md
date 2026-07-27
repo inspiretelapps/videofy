@@ -15,6 +15,7 @@ accessibility tracks, and optional human guide timestamps.
 | Pass | What it contributes |
 | --- | --- |
 | Embedded subtitles / SDH | Profanity, threats, violence, sexual references, substances, bullying, and captions such as `[SCREAMS]` |
+| Local subtitle files | An attached or matching sidecar `.srt`, `.vtt`, `.ass`, or `.ssa` file when no usable embedded English text track exists |
 | Audio description | Narrated visual actions that ordinary subtitles can miss |
 | Local Whisper fallback | English dialogue when usable text subtitles are unavailable; includes word-level timing for short profanity mutes |
 | YAMNet sound classifier | Screams, crying, growls, gunshots, explosions, breaking glass, crashes, and similar semantic sound clues |
@@ -104,7 +105,9 @@ cargo test
 
 ## Usage
 
-1. Drop a movie onto the window or choose a file.
+1. Drop a movie onto the window or choose a file. You may attach a subtitle
+   file at the same time; matching English sidecar files beside the movie are
+   also discovered automatically.
 2. Start reviewing when the editor opens; Text and Sound results will continue
    to appear in the coverage panel.
 3. Expand an event to see why it was flagged.
@@ -152,6 +155,8 @@ there are too few reliable anchors or the edition differs more substantially.
 ## Privacy
 
 Movie frames, audio, subtitles, and transcripts are processed on the machine.
+Local subtitle discovery only examines the movie folder and conventional
+`Subs` / `Subtitles` subfolders; it does not perform a web search.
 The app makes network requests only to download its model files and, when the
 user explicitly requests a guide lookup, to send the entered title/year to
 Does the Dog Die?.

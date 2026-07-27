@@ -66,6 +66,7 @@ interface SavedProject {
   manualCuts: ManualCut[];
   nextManualId: number;
   userEvents: ContentEvent[];
+  subtitlePath?: string | null;
 }
 
 interface Settings {
@@ -112,6 +113,7 @@ interface State {
   checkedIds: string[];
   showDetections: boolean;
   skipDetection: boolean;
+  subtitlePath: string | null;
 
   playhead: number;
   shuttle: number;
@@ -124,7 +126,7 @@ interface State {
   guideYear: number | null;
   guideOffset: number;
 
-  openFile: (path: string) => Promise<void>;
+  openFile: (path: string, subtitlePath?: string | null) => Promise<void>;
   runDeepScan: () => Promise<void>;
   reset: () => void;
   setPlayhead: (t: number) => void;
@@ -149,6 +151,7 @@ interface State {
   removeManualCut: (id: number) => void;
   changeSensitivity: (sensitivity: Sensitivity) => Promise<void>;
   importTimingFile: () => Promise<void>;
+  attachSubtitle: () => Promise<void>;
   lookupGuide: () => Promise<void>;
   setGuideIdentity: (title: string, year: number | null) => void;
   setGuideOffset: (offset: number) => void;
@@ -209,6 +212,7 @@ export const useStore = create<State>()((set, get) => ({
   checkedIds: [],
   showDetections: true,
   skipDetection: false,
+  subtitlePath: null,
   playhead: 0,
   shuttle: 0,
   seekReq: { t: 0, n: 0 },
@@ -219,7 +223,7 @@ export const useStore = create<State>()((set, get) => ({
   guideYear: null,
   guideOffset: 0,
 
-  openFile: async (path) => {
+  openFile: async (path, selectedSubtitlePath = null) => {
     if (get().stage === "importing") return;
     const skipDetection = get().skipDetection;
     attachListeners(set, get);
@@ -244,8 +248,10 @@ export const useStore = create<State>()((set, get) => ({
       const info = await invoke<VideoInfo>("probe_video", { path });
       const identity = inferMovieIdentity(info.fileName);
       const saved = loadProject(info);
+      const subtitlePath = selectedSubtitlePath ?? saved?.subtitlePath ?? null;
       set({
         info,
+        subtitlePath,
         guideTitle: identity.title,
         guideYear: identity.year,
         eventStatus: saved?.eventStatus ?? {},
@@ -384,6 +390,7 @@ export const useStore = create<State>()((set, get) => ({
         path: info.path,
         duration: info.duration,
         profanityTier: get().settings.profanityTier,
+        subtitlePath: get().subtitlePath,
       });
       addResult("text", result, `${result.cueCount} timed cues from ${result.source}`);
     } catch (error) {
@@ -421,6 +428,7 @@ export const useStore = create<State>()((set, get) => ({
       pendingIn: null,
       shuttle: 0,
       exporting: null,
+      subtitlePath: null,
     }),
 
   setPlayhead: (time) => set({ playhead: time }),
@@ -617,6 +625,23 @@ export const useStore = create<State>()((set, get) => ({
     }
   },
 
+  attachSubtitle: async () => {
+    if (get().scans.text.running) return;
+    const path = await open({
+      multiple: false,
+      filters: [
+        {
+          name: "Subtitle files",
+          extensions: ["srt", "vtt", "ass", "ssa"],
+        },
+      ],
+    });
+    if (typeof path !== "string") return;
+    set({ subtitlePath: path });
+    scheduleProjectSave(get);
+    await get().rescanText();
+  },
+
   lookupGuide: async () => {
     const { settings, guideTitle, guideYear } = get();
     set((state) => ({
@@ -684,6 +709,7 @@ export const useStore = create<State>()((set, get) => ({
         path: info.path,
         duration: info.duration,
         profanityTier: settings.profanityTier,
+        subtitlePath: get().subtitlePath,
       });
       if (get().info?.path !== info.path) return;
       // Replace the previous text events rather than merging, or the old
@@ -1082,6 +1108,7 @@ function scheduleProjectSave(get: () => State) {
       manualCuts: state.manualCuts,
       nextManualId: state.nextManualId,
       userEvents: state.userEvents,
+      subtitlePath: state.subtitlePath,
     };
     localStorage.setItem(projectStorageKey(state.info), JSON.stringify(project));
   }, 150);

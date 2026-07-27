@@ -7,6 +7,11 @@ import { fmtBytes } from "../lib/format";
 const VIDEO_EXTENSIONS = [
   "mp4", "mkv", "mov", "m4v", "avi", "webm", "ts", "m2ts", "mpg", "mpeg", "wmv", "flv",
 ];
+const SUBTITLE_EXTENSIONS = ["srt", "vtt", "ass", "ssa"];
+
+function fileName(path: string) {
+  return path.split(/[\\/]/).pop() ?? path;
+}
 
 export default function DropScreen() {
   const stage = useStore((s) => s.stage);
@@ -19,6 +24,7 @@ export default function DropScreen() {
   const skipDetection = useStore((s) => s.skipDetection);
   const setSkipDetection = useStore((s) => s.setSkipDetection);
   const [hovering, setHovering] = useState(false);
+  const [subtitlePath, setSubtitlePath] = useState<string | null>(null);
 
   const importing = stage === "importing";
 
@@ -31,7 +37,11 @@ export default function DropScreen() {
         const path = event.payload.paths.find((p) =>
           VIDEO_EXTENSIONS.includes(p.split(".").pop()?.toLowerCase() ?? ""),
         );
-        if (path && !importing) void openFile(path);
+        const subtitle = event.payload.paths.find((p) =>
+          SUBTITLE_EXTENSIONS.includes(p.split(".").pop()?.toLowerCase() ?? ""),
+        );
+        if (path && !importing) void openFile(path, subtitle ?? subtitlePath);
+        else if (subtitle && !importing) setSubtitlePath(subtitle);
       } else {
         setHovering(false);
       }
@@ -39,15 +49,25 @@ export default function DropScreen() {
     return () => {
       void unlisten.then((fn) => fn());
     };
-  }, [openFile, importing]);
+  }, [openFile, importing, subtitlePath]);
 
   const browse = useCallback(async () => {
     const path = await open({
       multiple: false,
       filters: [{ name: "Movies", extensions: VIDEO_EXTENSIONS }],
     });
-    if (typeof path === "string") void openFile(path);
-  }, [openFile]);
+    if (typeof path === "string") void openFile(path, subtitlePath);
+  }, [openFile, subtitlePath]);
+
+  const browseSubtitle = useCallback(async () => {
+    const path = await open({
+      multiple: false,
+      filters: [
+        { name: "Subtitle files", extensions: SUBTITLE_EXTENSIONS },
+      ],
+    });
+    if (typeof path === "string") setSubtitlePath(path);
+  }, []);
 
   return (
     <div className="flex h-full flex-col items-center justify-center px-10">
@@ -100,6 +120,35 @@ export default function DropScreen() {
                 or click to choose a file
               </span>
             </button>
+            <div className="mt-3 flex items-center justify-center gap-2 text-xs">
+              <button
+                onClick={browseSubtitle}
+                className="rounded-md border border-seam bg-bay/40 px-3 py-1.5 text-dust hover:border-faint hover:text-glow"
+              >
+                {subtitlePath ? "Change subtitle" : "Add subtitle file"}
+              </button>
+              {subtitlePath ? (
+                <>
+                  <span
+                    className="max-w-64 truncate text-faint"
+                    title={subtitlePath}
+                  >
+                    {fileName(subtitlePath)}
+                  </span>
+                  <button
+                    onClick={() => setSubtitlePath(null)}
+                    className="text-faint hover:text-flare"
+                    aria-label="Remove selected subtitle"
+                  >
+                    ×
+                  </button>
+                </>
+              ) : (
+                <span className="text-faint">
+                  Optional · matching subtitles beside the movie are found automatically
+                </span>
+              )}
+            </div>
             {importError && (
               <p className="mt-4 text-center text-sm text-flare">{importError}</p>
             )}

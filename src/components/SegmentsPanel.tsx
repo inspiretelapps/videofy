@@ -349,11 +349,34 @@ function GuideTools() {
   const setGuideOffset = useStore((state) => state.setGuideOffset);
   const lookupGuide = useStore((state) => state.lookupGuide);
   const importTimingFile = useStore((state) => state.importTimingFile);
+  const attachSubtitle = useStore((state) => state.attachSubtitle);
+  const subtitlePath = useStore((state) => state.subtitlePath);
   const runDeepScan = useStore((state) => state.runDeepScan);
   const guideScan = useStore((state) => state.scans.guide);
+  const textScan = useStore((state) => state.scans.text);
 
   return (
     <div className="mt-2 rounded-md border border-seam bg-well/45 p-2.5">
+      <div className="mb-2 border-b border-seam pb-2">
+        <p className="text-[10px] text-faint">Dialogue and caption subtitles</p>
+        <div className="mt-1 flex items-center gap-2">
+          <button
+            disabled={textScan.running}
+            onClick={() => void attachSubtitle()}
+            className="rounded bg-seam px-2 py-1 text-[11px] text-dust hover:text-glow disabled:opacity-40"
+          >
+            {subtitlePath ? "Change subtitle file" : "Attach subtitle file"}
+          </button>
+          <span
+            className="min-w-0 flex-1 truncate text-[10px] text-faint"
+            title={subtitlePath ?? undefined}
+          >
+            {subtitlePath
+              ? subtitlePath.split(/[\\/]/).pop()
+              : "Embedded and matching local files are found automatically"}
+          </span>
+        </div>
+      </div>
       <div className="flex gap-1.5">
         <input
           value={guideTitle}
@@ -394,7 +417,7 @@ function GuideTools() {
           onClick={() => void importTimingFile()}
           className="flex-1 rounded bg-seam px-2 py-1 text-[11px] text-dust hover:text-glow"
         >
-          Import SRT / SKP
+          Import warning timings
         </button>
       </div>
       <label className="mt-1.5 flex items-center gap-2 text-[10px] text-faint">
