@@ -36,6 +36,12 @@ const SENSITIVITY_VALUE: Record<Sensitivity, number> = {
 /// Source keys produced by the text pass — see `Cue.source` in
 /// `text_analysis.rs`. Used to replace, rather than merge, text results when
 /// the profanity tier changes.
+/// Default seconds visible when jumping to a detection. The old behaviour
+/// derived the span from the event's own length, which for a 2 s clue meant an
+/// ~11 s window — too tight to see what leads into the moment.
+const DEFAULT_ZOOM_SPAN = 90;
+const MIN_ZOOM_SPAN = 4;
+
 const TEXT_SOURCE_KEYS = ["subtitle", "audio-description", "transcript"];
 
 export const ALL_CATEGORIES: ContentCategory[] = [
@@ -66,6 +72,10 @@ interface SavedProject {
 interface Settings {
   dddApiKey: string;
   profanityTier: ProfanityTier;
+  /// Seconds visible in the timeline. Remembered across navigation and
+  /// sessions: jumping between detections should not silently rescale the
+  /// view the user chose.
+  zoomSpan: number;
 }
 
 interface State {
@@ -123,6 +133,8 @@ interface State {
   setShuttle: (rate: number) => void;
   setView: (t0: number, t1: number) => void;
   zoomToRange: (start: number, end: number) => void;
+  zoomBy: (factor: number) => void;
+  zoomToFit: () => void;
   select: (selection: Selection | null) => void;
   setEventStatus: (id: string, status: EventStatus) => void;
   bulkSetStatus: (ids: string[], status: EventStatus) => void;
@@ -161,6 +173,7 @@ const savedSettings = readJson<Partial<Settings>>("videofy.settings");
 const storedSettings: Settings = {
   dddApiKey: savedSettings?.dddApiKey ?? "",
   profanityTier: savedSettings?.profanityTier ?? "medium",
+  zoomSpan: savedSettings?.zoomSpan ?? DEFAULT_ZOOM_SPAN,
 };
 
 export const useStore = create<State>()((set, get) => ({
@@ -433,16 +446,44 @@ export const useStore = create<State>()((set, get) => ({
   },
   setShuttle: (rate) => set({ shuttle: rate }),
   setView: (t0, t1) => set({ view: { t0, t1 } }),
+  // Centre the remembered zoom span on the region, widening only if the region
+  // itself does not fit. Navigation keeps the user's zoom level.
   zoomToRange: (start, end) => {
     const duration = get().info?.duration ?? 1;
-    const span = Math.max(end - start, 6);
-    const pad = span * 0.8;
-    set({
-      view: {
-        t0: Math.max(0, start - pad),
-        t1: Math.min(duration, end + pad),
-      },
-    });
+    const wanted = Math.max(get().settings.zoomSpan, (end - start) * 1.4);
+    const span = Math.min(duration, wanted);
+    const centre = (start + end) / 2;
+    let t0 = centre - span / 2;
+    let t1 = t0 + span;
+    if (t0 < 0) (t1 -= t0), (t0 = 0);
+    if (t1 > duration) (t0 = Math.max(0, duration - span)), (t1 = duration);
+    set({ view: { t0, t1 } });
+  },
+
+  zoomBy: (factor) => {
+    const duration = get().info?.duration ?? 1;
+    const { view, playhead } = get();
+    const current = view.t1 - view.t0;
+    const span = Math.min(duration, Math.max(MIN_ZOOM_SPAN, current * factor));
+    // Keep the playhead where it is on screen when it is visible, so zooming
+    // does not throw away the user's place.
+    const anchor =
+      playhead >= view.t0 && playhead <= view.t1
+        ? playhead
+        : (view.t0 + view.t1) / 2;
+    const ratio = (anchor - view.t0) / current;
+    let t0 = anchor - ratio * span;
+    let t1 = t0 + span;
+    if (t0 < 0) (t1 -= t0), (t0 = 0);
+    if (t1 > duration) (t0 = Math.max(0, duration - span)), (t1 = duration);
+    set({ view: { t0, t1 } });
+    get().updateSettings({ zoomSpan: span });
+  },
+
+  zoomToFit: () => {
+    const duration = get().info?.duration ?? 1;
+    set({ view: { t0: 0, t1: duration } });
+    get().updateSettings({ zoomSpan: duration });
   },
   select: (selection) => set({ selection }),
 

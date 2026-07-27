@@ -8,7 +8,11 @@ export default function TransportBar() {
   const seekTo = useStore((s) => s.seekTo);
   const pendingIn = useStore((s) => s.pendingIn);
   const info = useStore((s) => s.info);
+  const zoomBy = useStore((s) => s.zoomBy);
+  const zoomToFit = useStore((s) => s.zoomToFit);
+  const view = useStore((s) => s.view);
   const playing = shuttle !== 0;
+  const span = view.t1 - view.t0;
 
   return (
     <div className="flex h-12 shrink-0 items-center gap-4 border-t border-seam bg-bay/60 px-4">
@@ -25,6 +29,22 @@ export default function TransportBar() {
         </button>
         <IconButton label="Forward 10 seconds" onClick={() => seekTo(playhead + 10)}>
           10⟳
+        </IconButton>
+      </div>
+
+      <div className="flex items-center gap-1">
+        <IconButton label="Zoom out" onClick={() => zoomBy(2)}>
+          −
+        </IconButton>
+        <button
+          onClick={zoomToFit}
+          title="Fit whole movie"
+          className="min-w-14 rounded px-2 py-1 font-mono text-[11px] text-faint hover:bg-seam hover:text-glow"
+        >
+          {fmtTime(span)}
+        </button>
+        <IconButton label="Zoom in" onClick={() => zoomBy(0.5)}>
+          +
         </IconButton>
       </div>
 

@@ -1,7 +1,12 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore } from "../store";
 
 const REVERSE_STEP_S = 0.08; // seek-step cadence for reverse shuttle
+// Every playhead push repaints the timeline and re-runs a store subscription
+// for each visible row, so pushing one per animation frame saturated the main
+// thread and made clicks feel dead. 25/sec is smooth to the eye and leaves the
+// UI responsive.
+const PLAYHEAD_PUSH_MS = 40;
 
 export default function Player() {
   const proxyUrl = useStore((s) => s.proxyUrl);
@@ -11,6 +16,7 @@ export default function Player() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const rafRef = useRef(0);
   const shuttleRef = useRef(0);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
 
   useEffect(() => {
     shuttleRef.current = shuttle;
@@ -22,13 +28,29 @@ export default function Player() {
     if (v && Number.isFinite(seekReq.t)) v.currentTime = seekReq.t;
   }, [seekReq]);
 
-  // forward shuttle uses native playback; reverse pauses and step-seeks below
-  useEffect(() => {
+  // Forward shuttle uses native playback; reverse pauses and step-seeks below.
+  //
+  // useLayoutEffect, not useEffect: WKWebView only allows audio to start inside
+  // the user gesture that asked for it. A passive effect runs after paint, by
+  // which point the gesture has expired and playback is either silent or
+  // refused outright — which is what "the video plays but there is no sound"
+  // looks like. Layout effects flush in the same task as the click or keypress.
+  useLayoutEffect(() => {
     const v = videoRef.current;
     if (!v) return;
     if (shuttle > 0) {
       v.playbackRate = Math.min(shuttle, 16);
-      void v.play().catch(() => useStore.getState().setShuttle(0));
+      v.muted = false;
+      v.volume = 1;
+      void v
+        .play()
+        .then(() => setPlaybackError(null))
+        .catch((error: unknown) => {
+          // Do not swallow this: a silent failure here is indistinguishable
+          // from a broken file.
+          setPlaybackError(String(error));
+          useStore.getState().setShuttle(0);
+        });
     } else {
       v.pause();
       v.playbackRate = 1;
@@ -39,6 +61,7 @@ export default function Player() {
   useEffect(() => {
     let last = performance.now();
     let reverseAcc = 0;
+    let lastPush = 0;
     const tick = (now: number) => {
       const dt = Math.min(0.25, (now - last) / 1000);
       last = now;
@@ -54,7 +77,8 @@ export default function Player() {
             setPlayhead(next);
             if (next <= 0) useStore.getState().setShuttle(0);
           }
-        } else if (!v.paused) {
+        } else if (!v.paused && now - lastPush >= PLAYHEAD_PUSH_MS) {
+          lastPush = now;
           setPlayhead(v.currentTime);
         }
       }
@@ -81,6 +105,11 @@ export default function Player() {
         />
       ) : (
         <p className="text-sm text-faint">No preview available</p>
+      )}
+      {playbackError && (
+        <p className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded bg-flare/20 px-3 py-1.5 text-[11px] text-glow">
+          Playback was blocked: {playbackError}
+        </p>
       )}
     </div>
   );

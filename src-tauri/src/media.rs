@@ -66,6 +66,12 @@ impl ScanHost for tauri::AppHandle {
     }
 }
 
+/// Bundle identifier, and therefore the name of the app's cache and data
+/// directories. Must match `identifier` in tauri.conf.json — when these drifted
+/// apart the harness silently used a parallel directory and the app
+/// re-downloaded every model.
+pub const BUNDLE_IDENTIFIER: &str = "com.jaco.videofy";
+
 /// Host for command-line runs. Reuses the app's real cache and model
 /// directories so a headless scan warms the same caches the GUI reads.
 pub struct HeadlessHost {
@@ -82,10 +88,10 @@ impl HeadlessHost {
         let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
         let base = PathBuf::from(home).join("Library");
         Ok(HeadlessHost {
-            cache: base.join("Caches").join("com.videofy.app"),
+            cache: base.join("Caches").join(BUNDLE_IDENTIFIER),
             models: base
                 .join("Application Support")
-                .join("com.videofy.app")
+                .join(BUNDLE_IDENTIFIER)
                 .join("models"),
             verbose,
             last_pct: std::sync::atomic::AtomicU8::new(u8::MAX),
@@ -247,5 +253,21 @@ pub fn wait_checked(
         Ok(())
     } else {
         Err(format!("{context} failed:\n{tail}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The harness and the app must agree on where caches and models live.
+    /// They did not, and the app silently re-downloaded 156 MB of models.
+    #[test]
+    fn identifier_matches_tauri_config() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("valid config");
+        assert_eq!(
+            config["identifier"].as_str(),
+            Some(super::BUNDLE_IDENTIFIER),
+            "BUNDLE_IDENTIFIER must match tauri.conf.json"
+        );
     }
 }

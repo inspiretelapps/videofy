@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ALL_CATEGORIES,
   deriveEdits,
@@ -60,23 +60,30 @@ export default function SegmentsPanel() {
   const [showSources, setShowSources] = useState(true);
   const [showGuide, setShowGuide] = useState(false);
 
-  const shown = events
-    .filter(
-      (event) =>
-        event.severity >= minSeverity && categories.includes(event.category),
-    )
-    .sort((a, b) => {
-      if (sortBy === "severity")
-        return b.severity - a.severity || b.confidence - a.confidence;
-      if (sortBy === "confidence") return b.confidence - a.confidence;
-      return a.peakTime - b.peakTime;
-    });
+  // Recomputed only when the inputs change: this used to re-filter and re-sort
+  // every event on every render, including each playhead tick.
+  const shown = useMemo(
+    () =>
+      events
+        .filter(
+          (event) =>
+            event.severity >= minSeverity && categories.includes(event.category),
+        )
+        .sort((a, b) => {
+          if (sortBy === "severity")
+            return b.severity - a.severity || b.confidence - a.confidence;
+          if (sortBy === "confidence") return b.confidence - a.confidence;
+          return a.peakTime - b.peakTime;
+        }),
+    [events, minSeverity, categories, sortBy],
+  );
+  const [rowLimit, setRowLimit] = useState(ROW_LIMIT_STEP);
+  const visible = shown.slice(0, rowLimit);
   const shownPending = shown.filter(
     (event) => (eventStatus[event.id] ?? "pending") === "pending",
   );
-  const checkedShown = checkedIds.filter((id) =>
-    shown.some((event) => event.id === id),
-  );
+  const shownIds = useMemo(() => new Set(shown.map((e) => e.id)), [shown]);
+  const checkedShown = checkedIds.filter((id) => shownIds.has(id));
   const bulkIds =
     checkedShown.length > 0
       ? checkedShown
@@ -230,7 +237,7 @@ export default function SegmentsPanel() {
               : "No content clues match these category and severity filters."}
           </p>
         ) : (
-          shown.map((event) => (
+          visible.map((event) => (
             <EventRow
               key={event.id}
               event={event}
@@ -239,6 +246,18 @@ export default function SegmentsPanel() {
               }
             />
           ))
+        )}
+
+        {shown.length > visible.length && (
+          <button
+            onClick={() => setRowLimit((limit) => limit + ROW_LIMIT_STEP)}
+            className="mt-2 w-full rounded border border-seam bg-well/50 px-2 py-2 text-[11px] text-dust hover:text-glow"
+          >
+            Showing {visible.length} of {shown.length} · show {ROW_LIMIT_STEP} more
+            <span className="mt-0.5 block text-[10px] text-faint">
+              Narrow with the category and severity filters above
+            </span>
+          </button>
         )}
 
         {manualCuts.length > 0 && (
@@ -308,6 +327,11 @@ function ScanChip({ label, scan }: { label: string; scan: ScanState }) {
     </div>
   );
 }
+
+/// Rows are plain DOM, so a few thousand of them stall the whole app — 3000
+/// events meant 51k nodes and a 160 ms response to every click. Render a
+/// window of them and say plainly what is being held back.
+const ROW_LIMIT_STEP = 200;
 
 const PROFANITY_HINT: Record<ProfanityTier, string> = {
   off: "No words are muted.",

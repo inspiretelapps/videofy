@@ -6,6 +6,18 @@ authors = ["Jaco"]
 edition = "2021"
 license = "MIT"
 
+# Declared explicitly: the crate has two binaries, and the Tauri bundler needs
+# the app one to be unambiguous. Without this (plus mainBinaryName in
+# tauri.conf.json) the bundler shipped scan_report as Videofy.app, which
+# double-clicked to nothing.
+[[bin]]
+name = "videofy"
+path = "src/main.rs"
+
+[[bin]]
+name = "scan_report"
+path = "src/bin/scan_report.rs"
+
 [lib]
 name = "videofy_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

@@ -123,6 +123,20 @@ export function useShortcuts() {
           s.seekTo(Math.max(0, target.start - 1.5));
           break;
         }
+        case "+":
+        case "=":
+          e.preventDefault();
+          s.zoomBy(0.5);
+          break;
+        case "-":
+        case "_":
+          e.preventDefault();
+          s.zoomBy(2);
+          break;
+        case "0":
+          e.preventDefault();
+          s.zoomToFit();
+          break;
         case "e":
         case "E":
           void s.exportMovie();
