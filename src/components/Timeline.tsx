@@ -38,6 +38,11 @@ export default function Timeline() {
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [hoverT, setHoverT] = useState<number | null>(null);
   const dragRef = useRef<{ startX: number; moved: boolean } | null>(null);
+  // Scrub lock: hands-free scrubbing. Right-click engages it, any click or
+  // Escape releases it. This started as an accident of right-click leaving a
+  // captured pointer behind, which scrubbed nicely but could never be
+  // released — so it is now deliberate, and reversible.
+  const [scrubLock, setScrubLock] = useState(false);
 
   const duration = info?.duration ?? 1;
 
@@ -106,12 +111,35 @@ export default function Timeline() {
     [manualCuts, events, showDetections],
   );
 
+  // Escape releases the lock wherever the pointer happens to be.
+  useEffect(() => {
+    if (!scrubLock) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setScrubLock(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [scrubLock]);
+
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const rect = wrapRef.current!.getBoundingClientRect();
+    seekTo(tOf(e.clientX - rect.left));
+    setScrubLock((locked) => !locked);
+  };
+
   const onPointerDown = (e: React.PointerEvent) => {
     // Seek FIRST. setPointerCapture is only an enhancement for dragging, but
     // it can throw in some webviews — and when it did, it took the seek down
     // with it and the click looked like it was ignored entirely.
     const rect = wrapRef.current!.getBoundingClientRect();
     seekTo(tOf(e.clientX - rect.left));
+    // A plain click while locked releases the lock, so clicking around the
+    // timeline works again without reaching for the keyboard.
+    if (scrubLock) {
+      setScrubLock(false);
+      return;
+    }
     dragRef.current = { startX: e.clientX, moved: false };
     try {
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
@@ -124,6 +152,10 @@ export default function Timeline() {
     const rect = wrapRef.current!.getBoundingClientRect();
     const t = tOf(e.clientX - rect.left);
     setHoverT(Math.max(0, Math.min(duration, t)));
+    if (scrubLock) {
+      seekTo(t);
+      return;
+    }
     if (dragRef.current) {
       if (Math.abs(e.clientX - dragRef.current.startX) > 3) dragRef.current.moved = true;
       if (dragRef.current.moved) seekTo(t);
@@ -431,9 +463,15 @@ export default function Timeline() {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerLeave={() => setHoverT(null)}
+      onContextMenu={onContextMenu}
       onDoubleClick={() => setView(0, duration)}
     >
       <canvas ref={canvasRef} style={{ width: size.w, height: size.h }} />
+      {scrubLock && (
+        <p className="pointer-events-none absolute top-1 right-2 rounded bg-amber/20 px-2 py-0.5 font-mono text-[10px] text-amber">
+          scrub lock · click or Esc to release
+        </p>
+      )}
     </div>
   );
 }

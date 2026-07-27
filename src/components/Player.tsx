@@ -8,6 +8,10 @@ const REVERSE_STEP_S = 0.08; // seek-step cadence for reverse shuttle
 // UI responsive.
 const PLAYHEAD_PUSH_MS = 40;
 
+type SinkCapableMedia = HTMLMediaElement & {
+  setSinkId?: (id: string) => Promise<void>;
+};
+
 export default function Player() {
   const proxyUrl = useStore((s) => s.proxyUrl);
   const shuttle = useStore((s) => s.shuttle);
@@ -18,10 +22,74 @@ export default function Player() {
   const shuttleRef = useRef(0);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [mediaState, setMediaState] = useState("loading…");
+  const [audioReport, setAudioReport] = useState("audio: not started");
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [sinkId, setSinkId] = useState("");
+
+  // Web Audio tap. Two jobs: it measures whether the element is actually
+  // producing signal (so "no sound" stops being a guess), and calling
+  // resume() inside the play gesture is itself the fix when WKWebView has
+  // parked the audio context in "suspended".
+  const audioRef = useRef<{
+    ctx: AudioContext;
+    analyser: AnalyserNode;
+    data: Uint8Array;
+  } | null>(null);
+
+  const ensureAudioGraph = () => {
+    const v = videoRef.current;
+    if (!v || audioRef.current) return audioRef.current;
+    try {
+      const Ctor =
+        window.AudioContext ??
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+      if (!Ctor) return null;
+      const ctx = new Ctor();
+      // createMediaElementSource may only be called once per element, and it
+      // reroutes the element's output — so the analyser must be connected
+      // through to the destination or playback goes silent.
+      const source = ctx.createMediaElementSource(v);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+      analyser.connect(ctx.destination);
+      audioRef.current = {
+        ctx,
+        analyser,
+        data: new Uint8Array(analyser.fftSize),
+      };
+      return audioRef.current;
+    } catch (error) {
+      setAudioReport(`audio graph failed: ${String(error)}`);
+      return null;
+    }
+  };
 
   useEffect(() => {
     shuttleRef.current = shuttle;
   }, [shuttle]);
+
+  // Output device picker, when the webview supports routing at all.
+  useEffect(() => {
+    const supported = "setSinkId" in HTMLMediaElement.prototype;
+    if (!supported) {
+      setDevices([]);
+      return;
+    }
+    void navigator.mediaDevices
+      ?.enumerateDevices()
+      .then((all) => setDevices(all.filter((d) => d.kind === "audiooutput")))
+      .catch(() => setDevices([]));
+  }, []);
+
+  useEffect(() => {
+    const v = videoRef.current as SinkCapableMedia | null;
+    if (!v?.setSinkId || !sinkId) return;
+    void v.setSinkId(sinkId).catch((error: unknown) => {
+      setPlaybackError(`could not switch output: ${String(error)}`);
+    });
+  }, [sinkId]);
 
   // seek requests from the timeline / panel
   useEffect(() => {
@@ -34,8 +102,7 @@ export default function Player() {
   // useLayoutEffect, not useEffect: WKWebView only allows audio to start inside
   // the user gesture that asked for it. A passive effect runs after paint, by
   // which point the gesture has expired and playback is either silent or
-  // refused outright — which is what "the video plays but there is no sound"
-  // looks like. Layout effects flush in the same task as the click or keypress.
+  // refused outright. Layout effects flush in the same task as the click.
   useLayoutEffect(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -43,6 +110,10 @@ export default function Player() {
       v.playbackRate = Math.min(shuttle, 16);
       v.muted = false;
       v.volume = 1;
+      const graph = ensureAudioGraph();
+      if (graph && graph.ctx.state !== "running") {
+        void graph.ctx.resume().catch(() => {});
+      }
       void v
         .play()
         .then(() => setPlaybackError(null))
@@ -63,6 +134,7 @@ export default function Player() {
     let last = performance.now();
     let reverseAcc = 0;
     let lastPush = 0;
+    let lastReport = 0;
     const tick = (now: number) => {
       const dt = Math.min(0.25, (now - last) / 1000);
       last = now;
@@ -81,6 +153,20 @@ export default function Player() {
         } else if (!v.paused && now - lastPush >= PLAYHEAD_PUSH_MS) {
           lastPush = now;
           setPlayhead(v.currentTime);
+        }
+        const graph = audioRef.current;
+        if (graph && now - lastReport >= 250) {
+          lastReport = now;
+          graph.analyser.getByteTimeDomainData(graph.data);
+          let peak = 0;
+          for (const sample of graph.data) {
+            peak = Math.max(peak, Math.abs(sample - 128));
+          }
+          const level = peak / 128;
+          setAudioReport(
+            `audio: ctx=${graph.ctx.state} level=${(level * 100).toFixed(0)}%` +
+              (v.paused ? " (paused)" : ""),
+          );
         }
       }
       rafRef.current = requestAnimationFrame(tick);
@@ -106,13 +192,7 @@ export default function Player() {
           onLoadedMetadata={(e) => {
             const v = e.currentTarget;
             setMediaState(
-              `ready · ${v.videoWidth}x${v.videoHeight} · ${v.duration.toFixed(0)}s · audio=${
-                // Safari-only, but the whole point here is Safari.
-                (v as HTMLVideoElement & { webkitAudioDecodedByteCount?: number })
-                  .webkitAudioDecodedByteCount !== undefined
-                  ? "decoding"
-                  : "unknown"
-              }`,
+              `ready · ${v.videoWidth}x${v.videoHeight} · ${v.duration.toFixed(0)}s`,
             );
           }}
           onError={(e) => {
@@ -125,9 +205,28 @@ export default function Player() {
       ) : (
         <p className="text-sm text-faint">No preview available</p>
       )}
-      <p className="pointer-events-none absolute top-2 left-2 rounded bg-well/70 px-2 py-1 font-mono text-[10px] text-faint">
-        {mediaState}
-      </p>
+
+      <div className="pointer-events-none absolute top-2 left-2 rounded bg-well/70 px-2 py-1 font-mono text-[10px] text-faint">
+        <span>{mediaState}</span>
+        <span className="ml-2">{audioReport}</span>
+      </div>
+
+      {devices.length > 0 && (
+        <select
+          value={sinkId}
+          onChange={(event) => setSinkId(event.target.value)}
+          title="Audio output device"
+          className="absolute top-2 right-2 max-w-56 rounded border border-seam bg-well/80 px-2 py-1 text-[10px] text-dust"
+        >
+          <option value="">System default output</option>
+          {devices.map((device, index) => (
+            <option key={device.deviceId} value={device.deviceId}>
+              {device.label || `Output ${index + 1}`}
+            </option>
+          ))}
+        </select>
+      )}
+
       {playbackError && (
         <p className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded bg-flare/20 px-3 py-1.5 text-[11px] text-glow">
           Playback was blocked: {playbackError}
