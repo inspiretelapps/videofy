@@ -22,8 +22,12 @@ export interface VideoInfo {
   height: number;
   fps: number;
   videoCodec: string;
+  videoPixelFormat: string;
   audioCodec: string;
+  videoTracks: number;
   audioTracks: number;
+  chapterCount: number;
+  hasUnsupportedPreviewStreams: boolean;
   tracks: MediaTrack[];
 }
 

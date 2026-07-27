@@ -32,8 +32,12 @@ pub struct VideoInfo {
     pub height: u32,
     pub fps: f64,
     pub video_codec: String,
+    pub video_pixel_format: String,
     pub audio_codec: String,
+    pub video_tracks: u32,
     pub audio_tracks: u32,
+    pub chapter_count: u32,
+    pub has_unsupported_preview_streams: bool,
     pub tracks: Vec<MediaTrack>,
 }
 
@@ -41,6 +45,8 @@ pub struct VideoInfo {
 struct FfprobeOut {
     format: FfFormat,
     streams: Vec<FfStream>,
+    #[serde(default)]
+    chapters: Vec<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -55,6 +61,7 @@ struct FfStream {
     index: Option<u32>,
     codec_type: Option<String>,
     codec_name: Option<String>,
+    pix_fmt: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
     avg_frame_rate: Option<String>,
@@ -105,6 +112,7 @@ pub fn probe_sync(path: &str) -> Result<VideoInfo, String> {
             "json",
             "-show_format",
             "-show_streams",
+            "-show_chapters",
             path,
         ])
         .output()
@@ -128,6 +136,20 @@ pub fn probe_sync(path: &str) -> Result<VideoInfo, String> {
         .iter()
         .filter(|s| s.codec_type.as_deref() == Some("audio"))
         .collect();
+    let video_tracks = parsed
+        .streams
+        .iter()
+        .filter(|s| s.codec_type.as_deref() == Some("video"))
+        .count() as u32;
+    // Timed metadata/data tracks are common in otherwise clean phone-camera
+    // MP4 files and WebKit ignores them safely. Subtitle, attachment and other
+    // stream types are not safe for the zero-copy preview path.
+    let has_unsupported_preview_streams = parsed.streams.iter().any(|stream| {
+        !matches!(
+            stream.codec_type.as_deref(),
+            Some("video") | Some("audio") | Some("data")
+        )
+    });
     let tracks = parsed
         .streams
         .iter()
@@ -195,11 +217,15 @@ pub fn probe_sync(path: &str) -> Result<VideoInfo, String> {
             .or_else(|| parse_rate(&video.r_frame_rate))
             .unwrap_or(24.0),
         video_codec: video.codec_name.clone().unwrap_or_default(),
+        video_pixel_format: video.pix_fmt.clone().unwrap_or_default(),
         audio_codec: audios
             .first()
             .and_then(|a| a.codec_name.clone())
             .unwrap_or_default(),
+        video_tracks,
         audio_tracks: audios.len() as u32,
+        chapter_count: parsed.chapters.len() as u32,
+        has_unsupported_preview_streams,
         tracks,
     })
 }

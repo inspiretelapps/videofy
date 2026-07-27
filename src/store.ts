@@ -84,6 +84,8 @@ interface State {
   info: VideoInfo | null;
   proxyUrl: string | null;
   keyframes: number[];
+  keyframesReady: boolean;
+  keyframesError: string | null;
   analysis: AnalysisResult | null;
   rawEvents: ContentEvent[];
   events: ContentEvent[];
@@ -183,6 +185,8 @@ export const useStore = create<State>()((set, get) => ({
   info: null,
   proxyUrl: null,
   keyframes: [],
+  keyframesReady: false,
+  keyframesError: null,
   analysis: null,
   rawEvents: [],
   events: [],
@@ -229,6 +233,9 @@ export const useStore = create<State>()((set, get) => ({
       proxyPct: 0,
       analysisPct: 0,
       waveformPct: 0,
+      keyframes: [],
+      keyframesReady: false,
+      keyframesError: null,
       rawEvents: [],
       events: [],
       userEvents: [],
@@ -255,45 +262,24 @@ export const useStore = create<State>()((set, get) => ({
         nextManualId: saved?.nextManualId ?? 1,
         userEvents: saved?.userEvents ?? [],
       });
-      const proxyP = invoke<string>("generate_proxy", {
+      const proxyPath = await invoke<string>("generate_proxy", {
         path,
         duration: info.duration,
         sourceHeight: info.height,
       });
-      const keyframesP = invoke<number[]>("get_keyframes", { path });
-      const loudnessP = invoke<AnalysisResult>("analyze_audio", {
-        path,
-        duration: info.duration,
-        sensitivity: SENSITIVITY_VALUE[get().sensitivity],
-      }).catch((error) => {
-        set({ analysisError: String(error) });
-        return null;
-      });
-      const waveformP = invoke<WaveformData>("get_waveform", {
-        path,
-        duration: info.duration,
-      }).catch(() => null);
-      const [proxyPath, keyframes, analysis, waveformData] = await Promise.all([
-        proxyP,
-        keyframesP,
-        loudnessP,
-        waveformP,
-      ]);
-      const rawEvents = dedupeById([
-        ...(analysis?.events ?? []),
-        ...(saved?.userEvents ?? []),
-      ]);
+      const rawEvents = dedupeById([...(saved?.userEvents ?? [])]);
       const events = fuseEvents(rawEvents);
       const statuses = { ...(saved?.eventStatus ?? {}) };
       for (const event of events) statuses[event.id] ??= "pending";
       set({
         stage: "editor",
         proxyUrl: convertFileSrc(proxyPath),
-        keyframes,
-        analysis,
+        keyframes: [],
+        keyframesReady: false,
+        analysis: null,
         rawEvents,
         events,
-        waveform: waveformData ? buildWaveformLevels(waveformData) : null,
+        waveform: null,
         eventStatus: statuses,
         selection: null,
         pendingIn: null,
@@ -302,7 +288,78 @@ export const useStore = create<State>()((set, get) => ({
         shuttle: 0,
         view: { t0: 0, t1: info.duration },
       });
-      void get().runDeepScan();
+
+      // The preview is the only thing required to start editing. Everything
+      // else fills in behind it. Running these decoders alongside preview
+      // generation made the preview itself slower and Promise.all kept the
+      // opening screen visible until the slowest job finished.
+      void invoke<number[]>("get_keyframes", { path })
+        .then((keyframes) => {
+          if (get().info?.path === info.path) {
+            set(
+              keyframes.length > 0
+                ? { keyframes, keyframesReady: true, keyframesError: null }
+                : {
+                    keyframes: [],
+                    keyframesReady: false,
+                    keyframesError:
+                      "No safe video keyframes were found for lossless export.",
+                  },
+            );
+          }
+        })
+        .catch((error) => {
+          if (get().info?.path === info.path) {
+            set({ keyframesReady: false, keyframesError: String(error) });
+          }
+        });
+
+      void (async () => {
+        try {
+          const waveformData = await invoke<WaveformData>("get_waveform", {
+            path,
+            duration: info.duration,
+          });
+          if (get().info?.path !== info.path) return;
+          set({ waveform: buildWaveformLevels(waveformData) });
+        } catch {
+          // The loudness envelope below remains a usable timeline fallback.
+        }
+        if (get().info?.path !== info.path) return;
+
+        try {
+          const analysis = await invoke<AnalysisResult>("analyze_audio", {
+            path,
+            duration: info.duration,
+            sensitivity: SENSITIVITY_VALUE[get().sensitivity],
+          });
+          if (get().info?.path !== info.path) return;
+          const current = get();
+          const nextRaw = dedupeById([
+            ...current.rawEvents.filter(
+              (event) => event.sourceKey !== "loudness",
+            ),
+            ...analysis.events,
+          ]);
+          const nextEvents = fuseEvents(nextRaw);
+          set({
+            analysis,
+            rawEvents: nextRaw,
+            events: nextEvents,
+            eventStatus: carryEventStatuses(
+              current.events,
+              nextEvents,
+              current.eventStatus,
+            ),
+            analysisError: null,
+          });
+        } catch (error) {
+          if (get().info?.path === info.path) {
+            set({ analysisError: String(error) });
+          }
+        }
+        if (get().info?.path === info.path) void get().runDeepScan();
+      })();
     } catch (error) {
       set({ stage: "welcome", importError: String(error), info: null });
     }
@@ -410,6 +467,8 @@ export const useStore = create<State>()((set, get) => ({
       info: null,
       proxyUrl: null,
       keyframes: [],
+      keyframesReady: false,
+      keyframesError: null,
       analysis: null,
       rawEvents: [],
       events: [],
@@ -747,8 +806,21 @@ export const useStore = create<State>()((set, get) => ({
   },
 
   exportMovie: async () => {
-    const { info, keyframes } = get();
+    const { info, keyframes, keyframesReady, keyframesError } = get();
     if (!info || get().exporting?.running) return;
+    if (!keyframesReady) {
+      set({
+        exporting: {
+          running: false,
+          pct: 0,
+          result: null,
+          error:
+            keyframesError ??
+            "The lossless export map is still being prepared. Please try again shortly.",
+        },
+      });
+      return;
+    }
     const { cuts, mutes } = deriveEdits(get());
     const dot = info.fileName.lastIndexOf(".");
     const stem = dot > 0 ? info.fileName.slice(0, dot) : info.fileName;

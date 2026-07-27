@@ -467,6 +467,11 @@ export default function Timeline() {
       onDoubleClick={() => setView(0, duration)}
     >
       <canvas ref={canvasRef} style={{ width: size.w, height: size.h }} />
+      {!waveform && !analysis && (
+        <p className="pointer-events-none absolute top-2 left-1/2 -translate-x-1/2 font-mono text-[10px] text-faint">
+          Loading waveform in the background…
+        </p>
+      )}
       {scrubLock && (
         <p className="pointer-events-none absolute top-1 right-2 rounded bg-amber/20 px-2 py-0.5 font-mono text-[10px] text-amber">
           scrub lock · click or Esc to release

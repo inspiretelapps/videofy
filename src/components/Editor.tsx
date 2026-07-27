@@ -12,6 +12,8 @@ export default function Editor() {
   const info = useStore((s) => s.info);
   const reset = useStore((s) => s.reset);
   const exportMovie = useStore((s) => s.exportMovie);
+  const keyframesReady = useStore((s) => s.keyframesReady);
+  const keyframesError = useStore((s) => s.keyframesError);
   const editCount = useStore((state) => {
     const edits = deriveEdits({
       events: state.events,
@@ -44,10 +46,18 @@ export default function Editor() {
           </span>
         </p>
         <button
+          disabled={!keyframesReady}
           onClick={() => void exportMovie()}
-          className="rounded-md bg-glow px-4 py-1.5 text-sm font-semibold text-well transition-colors hover:bg-white"
+          title={
+            keyframesReady
+              ? "Export from the untouched original movie"
+              : keyframesError ?? "Preparing the lossless export map"
+          }
+          className="rounded-md bg-glow px-4 py-1.5 text-sm font-semibold text-well transition-colors hover:bg-white disabled:cursor-wait disabled:opacity-45"
         >
-          Export clean copy{editCount > 0 ? ` (${editCount})` : ""}
+          {keyframesReady
+            ? `Export clean copy${editCount > 0 ? ` (${editCount})` : ""}`
+            : "Preparing export…"}
         </button>
       </header>
 

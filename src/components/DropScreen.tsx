@@ -19,8 +19,6 @@ export default function DropScreen() {
   const openFile = useStore((s) => s.openFile);
   const info = useStore((s) => s.info);
   const proxyPct = useStore((s) => s.proxyPct);
-  const analysisPct = useStore((s) => s.analysisPct);
-  const waveformPct = useStore((s) => s.waveformPct);
   const [hovering, setHovering] = useState(false);
   const [subtitlePath, setSubtitlePath] = useState<string | null>(null);
 
@@ -157,12 +155,10 @@ export default function DropScreen() {
               </p>
             )}
             <div className="mt-6 space-y-4">
-              <ProgressRow label="Preparing audio baseline" pct={analysisPct} />
-              <ProgressRow label="Tracing the waveform" pct={waveformPct} />
-              <ProgressRow label="Building preview" pct={proxyPct} />
+              <ProgressRow label="Opening preview" pct={proxyPct} />
             </div>
             <p className="mt-6 text-center text-xs text-faint">
-              Long movies take a few minutes the first time. Re-opening is instant.
+              Detection and the waveform will continue in the editor. Re-opening is instant.
             </p>
           </div>
         )}
