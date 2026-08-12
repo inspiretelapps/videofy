@@ -14,12 +14,16 @@ type SinkCapableMedia = HTMLMediaElement & {
 
 export default function Player() {
   const proxyUrl = useStore((s) => s.proxyUrl);
+  const rebuildingPreview = useStore((s) => s.rebuildingPreview);
+  const proxyPct = useStore((s) => s.proxyPct);
+  const infoPath = useStore((s) => s.info?.path);
   const shuttle = useStore((s) => s.shuttle);
   const seekReq = useStore((s) => s.seekReq);
   const setPlayhead = useStore((s) => s.setPlayhead);
   const videoRef = useRef<HTMLVideoElement>(null);
   const rafRef = useRef(0);
   const shuttleRef = useRef(0);
+  const rebuildAttemptedRef = useRef(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [mediaState, setMediaState] = useState("loading…");
   const [audioReport, setAudioReport] = useState("audio: not started");
@@ -33,6 +37,28 @@ export default function Player() {
   // decoded-byte counter instead, which measures the same thing and touches
   // nothing.
   const audioBytesRef = useRef(0);
+
+  const requestCompatiblePreview = () => {
+    const state = useStore.getState();
+    if (rebuildAttemptedRef.current || state.rebuildingPreview) return;
+    rebuildAttemptedRef.current = true;
+    setPlaybackError(null);
+    state.setShuttle(0);
+    void state.rebuildPreview().catch((error: unknown) => {
+      setPlaybackError(
+        `Could not build a compatible preview: ${String(error)}`,
+      );
+    });
+  };
+
+  useEffect(() => {
+    rebuildAttemptedRef.current = false;
+  }, [infoPath]);
+
+  useEffect(() => {
+    setPlaybackError(null);
+    setMediaState("loading…");
+  }, [infoPath, proxyUrl]);
 
   // Independent of the video: an oscillator proves whether this webview can
   // make any sound at all, which splits "the app cannot play audio" from
@@ -102,7 +128,7 @@ export default function Player() {
   // refused outright. Layout effects flush in the same task as the click.
   useLayoutEffect(() => {
     const v = videoRef.current;
-    if (!v) return;
+    if (!v || rebuildingPreview) return;
     if (shuttle > 0) {
       v.playbackRate = Math.min(shuttle, 16);
       v.muted = false;
@@ -111,8 +137,14 @@ export default function Player() {
         .play()
         .then(() => setPlaybackError(null))
         .catch((error: unknown) => {
-          // Do not swallow this: a silent failure here is indistinguishable
-          // from a broken file.
+          const name =
+            error instanceof DOMException || error instanceof Error
+              ? error.name
+              : "";
+          if (name === "NotSupportedError") {
+            requestCompatiblePreview();
+            return;
+          }
           setPlaybackError(String(error));
           useStore.getState().setShuttle(0);
         });
@@ -120,7 +152,7 @@ export default function Player() {
       v.pause();
       v.playbackRate = 1;
     }
-  }, [shuttle]);
+  }, [shuttle, rebuildingPreview]);
 
   // report time while playing; drive reverse shuttle with stepped seeks
   useEffect(() => {
@@ -180,6 +212,7 @@ export default function Player() {
     <div className="relative flex min-h-0 flex-1 items-center justify-center bg-well">
       {proxyUrl ? (
         <video
+          key={proxyUrl}
           ref={videoRef}
           src={proxyUrl}
           className="max-h-full max-w-full"
@@ -198,6 +231,10 @@ export default function Player() {
           }}
           onError={(e) => {
             const err = e.currentTarget.error;
+            if (err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+              requestCompatiblePreview();
+              return;
+            }
             setPlaybackError(
               `media error ${err?.code ?? "?"}: ${err?.message || "could not load the preview"}`,
             );
@@ -236,9 +273,15 @@ export default function Player() {
         </select>
       )}
 
-      {playbackError && (
+      {rebuildingPreview && (
+        <p className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded bg-well/80 px-3 py-1.5 text-[11px] text-glow">
+          Building a compatible preview… {Math.round(proxyPct)}%
+        </p>
+      )}
+
+      {playbackError && !rebuildingPreview && (
         <p className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded bg-flare/20 px-3 py-1.5 text-[11px] text-glow">
-          Playback was blocked: {playbackError}
+          {playbackError}
         </p>
       )}
     </div>

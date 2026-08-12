@@ -83,6 +83,7 @@ interface State {
   importError: string | null;
   info: VideoInfo | null;
   proxyUrl: string | null;
+  rebuildingPreview: boolean;
   keyframes: number[];
   keyframesReady: boolean;
   keyframesError: string | null;
@@ -128,6 +129,7 @@ interface State {
   guideOffset: number;
 
   openFile: (path: string, subtitlePath?: string | null) => Promise<void>;
+  rebuildPreview: () => Promise<void>;
   runDeepScan: () => Promise<void>;
   reset: () => void;
   setPlayhead: (t: number) => void;
@@ -184,6 +186,7 @@ export const useStore = create<State>()((set, get) => ({
   importError: null,
   info: null,
   proxyUrl: null,
+  rebuildingPreview: false,
   keyframes: [],
   keyframesReady: false,
   keyframesError: null,
@@ -231,6 +234,7 @@ export const useStore = create<State>()((set, get) => ({
       stage: "importing",
       importError: null,
       proxyPct: 0,
+      rebuildingPreview: false,
       analysisPct: 0,
       waveformPct: 0,
       keyframes: [],
@@ -266,6 +270,7 @@ export const useStore = create<State>()((set, get) => ({
         path,
         duration: info.duration,
         sourceHeight: info.height,
+        forceTranscode: false,
       });
       const rawEvents = dedupeById([...(saved?.userEvents ?? [])]);
       const events = fuseEvents(rawEvents);
@@ -274,6 +279,7 @@ export const useStore = create<State>()((set, get) => ({
       set({
         stage: "editor",
         proxyUrl: convertFileSrc(proxyPath),
+        rebuildingPreview: false,
         keyframes: [],
         keyframesReady: false,
         analysis: null,
@@ -461,11 +467,36 @@ export const useStore = create<State>()((set, get) => ({
     }
   },
 
+  rebuildPreview: async () => {
+    const info = get().info;
+    if (!info || get().rebuildingPreview) return;
+    attachListeners(set, get);
+    set({ rebuildingPreview: true, proxyPct: 0 });
+    try {
+      const proxyPath = await invoke<string>("generate_proxy", {
+        path: info.path,
+        duration: info.duration,
+        sourceHeight: info.height,
+        forceTranscode: true,
+      });
+      if (get().info?.path !== info.path) return;
+      set({
+        proxyUrl: convertFileSrc(proxyPath),
+        rebuildingPreview: false,
+      });
+    } catch (error) {
+      if (get().info?.path !== info.path) return;
+      set({ rebuildingPreview: false });
+      throw error;
+    }
+  },
+
   reset: () =>
     set({
       stage: "welcome",
       info: null,
       proxyUrl: null,
+      rebuildingPreview: false,
       keyframes: [],
       keyframesReady: false,
       keyframesError: null,

@@ -1,9 +1,9 @@
 use crate::probe::VideoInfo;
 use crate::{media, probe};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tauri::Emitter;
 
-const PREVIEW_VERSION: &str = "preview-v4";
+const PREVIEW_VERSION: &str = "preview-v5";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreviewStrategy {
@@ -11,10 +11,12 @@ enum PreviewStrategy {
     /// hard link inside the app cache exposes it through the tightly scoped
     /// asset protocol without copying or encoding the movie.
     DirectLink,
-    /// H.264/HEVC can be copied into a clean MP4. Only incompatible audio is
+    /// 8-bit H.264 can be copied into a clean MP4. Only incompatible audio is
     /// encoded, which is normally many times faster than decoding every frame.
     Remux,
-    /// Last resort for codecs WebKit cannot play.
+    /// Last resort for codecs WKWebView cannot play. HEVC belongs here:
+    /// VideoToolbox can decode it, but the HTML video element still throws
+    /// NotSupportedError even for a well-formed hvc1 Main 8-bit MP4.
     Transcode,
 }
 
@@ -25,11 +27,7 @@ fn is_mp4_family(container: &str) -> bool {
 }
 
 fn video_can_copy(info: &VideoInfo) -> bool {
-    match info.video_codec.as_str() {
-        "h264" => matches!(info.video_pixel_format.as_str(), "yuv420p" | "yuvj420p"),
-        "hevc" => matches!(info.video_pixel_format.as_str(), "yuv420p" | "yuv420p10le"),
-        _ => false,
-    }
+    info.video_codec == "h264" && matches!(info.video_pixel_format.as_str(), "yuv420p" | "yuvj420p")
 }
 
 fn preferred_audio_codec(info: &VideoInfo) -> Option<&str> {
@@ -65,6 +63,40 @@ fn valid_cache_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn preview_is_webkit_playable(path: &Path) -> bool {
+    probe::probe_sync(&path.to_string_lossy())
+        .map(|info| video_can_copy(&info))
+        .unwrap_or(false)
+}
+
+fn cached_playable_preview(dir: &Path, force_transcode: bool) -> Option<PathBuf> {
+    let candidates = [
+        dir.join(format!("{PREVIEW_VERSION}.mp4")),
+        dir.join("preview-v4.mp4"),
+        dir.join("proxy-v3.mp4"),
+    ];
+    let mut playable = None;
+    for path in candidates {
+        if !valid_cache_file(&path) {
+            continue;
+        }
+        if preview_is_webkit_playable(&path) {
+            if playable.is_none() {
+                playable = Some(path);
+            }
+            continue;
+        }
+        // v4 remuxed HEVC into MP4. WKWebView rejects those files, so drop
+        // the cache entry rather than serving it again.
+        let _ = std::fs::remove_file(&path);
+    }
+    if force_transcode {
+        None
+    } else {
+        playable
+    }
+}
+
 /// Produces a WebKit-compatible viewing copy. This file is disposable and is
 /// never used by export; cuts are always applied to the untouched source.
 #[tauri::command]
@@ -73,20 +105,18 @@ pub async fn generate_proxy(
     path: String,
     duration: f64,
     source_height: u32,
+    force_transcode: Option<bool>,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let force_transcode = force_transcode.unwrap_or(false);
         let dir = media::cache_dir_for(&app, &path)?;
         let _guard = media::JobGuard::acquire(format!("proxy:{}", dir.display()))?;
-        let preview = dir.join(format!("{PREVIEW_VERSION}.mp4"));
-        if valid_cache_file(&preview) {
-            return Ok(preview.to_string_lossy().to_string());
+        if let Some(cached) = cached_playable_preview(&dir, force_transcode) {
+            return Ok(cached.to_string_lossy().to_string());
         }
-
-        // Existing users should not regenerate a movie that already has the
-        // reliable v3 proxy. New imports take the faster v4 paths below.
-        let legacy = dir.join("proxy-v3.mp4");
-        if valid_cache_file(&legacy) {
-            return Ok(legacy.to_string_lossy().to_string());
+        let preview = dir.join(format!("{PREVIEW_VERSION}.mp4"));
+        if force_transcode {
+            let _ = std::fs::remove_file(&preview);
         }
 
         if let Ok(entries) = std::fs::read_dir(&dir) {
@@ -102,7 +132,11 @@ pub async fn generate_proxy(
         }
         let tmp = dir.join(format!("{PREVIEW_VERSION}.tmp.{}.mp4", std::process::id()));
         let info = probe::probe_sync(&path)?;
-        let strategy = choose_preview_strategy(&info);
+        let strategy = if force_transcode {
+            PreviewStrategy::Transcode
+        } else {
+            choose_preview_strategy(&info)
+        };
 
         if strategy == PreviewStrategy::DirectLink {
             match std::fs::hard_link(&path, &preview) {
@@ -203,10 +237,6 @@ fn run_ffmpeg_preview(
 
     if strategy == PreviewStrategy::Remux {
         args.extend(["-c:v".into(), "copy".into()]);
-        if info.video_codec == "hevc" {
-            // Apple's media stack expects this sample-entry tag for HEVC MP4.
-            args.extend(["-tag:v".into(), "hvc1".into()]);
-        }
     } else {
         let target_height = source_height.min(360);
         let target_height = target_height - (target_height % 2);
@@ -333,8 +363,18 @@ mod tests {
     #[test]
     fn copies_compatible_video_and_transcodes_only_as_a_last_resort() {
         assert_eq!(
-            choose_preview_strategy(&info("matroska,webm", "hevc", "eac3")),
+            choose_preview_strategy(&info("matroska,webm", "h264", "eac3")),
             PreviewStrategy::Remux
+        );
+        assert_eq!(
+            choose_preview_strategy(&info("matroska,webm", "hevc", "eac3")),
+            PreviewStrategy::Transcode,
+            "WKWebView cannot play HEVC, even as hvc1 in MP4"
+        );
+        assert_eq!(
+            choose_preview_strategy(&info("mov,mp4", "hevc", "aac")),
+            PreviewStrategy::Transcode,
+            "native HEVC MP4 still has to be transcoded for the webview"
         );
         assert_eq!(
             choose_preview_strategy(&info("matroska,webm", "av1", "opus")),
