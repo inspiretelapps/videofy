@@ -5,6 +5,7 @@ description = "Cut scary parts out of movies, losslessly"
 authors = ["Jaco"]
 edition = "2021"
 license = "MIT"
+default-run = "videofy"
 
 # Declared explicitly: the crate has two binaries, and the Tauri bundler needs
 # the app one to be unambiguous. Without this (plus mainBinaryName in
