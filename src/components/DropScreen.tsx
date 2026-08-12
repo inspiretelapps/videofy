@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useStore } from "../store";
@@ -21,8 +22,19 @@ export default function DropScreen() {
   const proxyPct = useStore((s) => s.proxyPct);
   const [hovering, setHovering] = useState(false);
   const [subtitlePath, setSubtitlePath] = useState<string | null>(null);
+  const [tools, setTools] = useState<{
+    ffmpeg: boolean;
+    ffprobe: boolean;
+  } | null>(null);
 
   const importing = stage === "importing";
+  const toolsMissing = tools && (!tools.ffmpeg || !tools.ffprobe);
+
+  useEffect(() => {
+    void invoke<{ ffmpeg: boolean; ffprobe: boolean }>("check_media_tools")
+      .then((status) => setTools({ ffmpeg: status.ffmpeg, ffprobe: status.ffprobe }))
+      .catch(() => setTools({ ffmpeg: false, ffprobe: false }));
+  }, []);
 
   useEffect(() => {
     const unlisten = getCurrentWebview().onDragDropEvent((event) => {
@@ -36,7 +48,7 @@ export default function DropScreen() {
         const subtitle = event.payload.paths.find((p) =>
           SUBTITLE_EXTENSIONS.includes(p.split(".").pop()?.toLowerCase() ?? ""),
         );
-        if (path && !importing) void openFile(path, subtitle ?? subtitlePath);
+        if (path && !importing && !toolsMissing) void openFile(path, subtitle ?? subtitlePath);
         else if (subtitle && !importing) setSubtitlePath(subtitle);
       } else {
         setHovering(false);
@@ -45,15 +57,15 @@ export default function DropScreen() {
     return () => {
       void unlisten.then((fn) => fn());
     };
-  }, [openFile, importing, subtitlePath]);
+  }, [openFile, importing, subtitlePath, toolsMissing]);
 
   const browse = useCallback(async () => {
     const path = await open({
       multiple: false,
       filters: [{ name: "Movies", extensions: VIDEO_EXTENSIONS }],
     });
-    if (typeof path === "string") void openFile(path, subtitlePath);
-  }, [openFile, subtitlePath]);
+    if (typeof path === "string" && !toolsMissing) void openFile(path, subtitlePath);
+  }, [openFile, subtitlePath, toolsMissing]);
 
   const browseSubtitle = useCallback(async () => {
     const path = await open({
@@ -86,11 +98,12 @@ export default function DropScreen() {
           <>
             <button
               onClick={browse}
+              disabled={!!toolsMissing}
               className={`mt-8 block w-full rounded-xl border-2 border-dashed px-8 py-14 text-center transition-colors ${
                 hovering
                   ? "border-flare bg-flare/10"
                   : "border-seam bg-bay/40 hover:border-faint"
-              }`}
+              } disabled:cursor-not-allowed disabled:opacity-50`}
             >
               <span className="block text-lg font-medium text-glow">
                 {hovering ? "Drop it here" : "Drop a movie here"}
@@ -128,6 +141,12 @@ export default function DropScreen() {
                 </span>
               )}
             </div>
+            {toolsMissing && (
+              <p className="mt-4 text-center text-sm text-flare">
+                ffmpeg and ffprobe were not found. Install them with Homebrew
+                (`brew install ffmpeg`) and reopen Videofy.
+              </p>
+            )}
             {importError && (
               <p className="mt-4 text-center text-sm text-flare">{importError}</p>
             )}
@@ -158,7 +177,7 @@ export default function DropScreen() {
               <ProgressRow label="Opening preview" pct={proxyPct} />
             </div>
             <p className="mt-6 text-center text-xs text-faint">
-              Detection and the waveform will continue in the editor. Re-opening is instant.
+              Detection and the waveform will continue in the editor.
             </p>
           </div>
         )}

@@ -153,41 +153,7 @@ pub async fn generate_proxy(
             }
         }
 
-        let first_strategy = if strategy == PreviewStrategy::Transcode {
-            PreviewStrategy::Transcode
-        } else {
-            PreviewStrategy::Remux
-        };
-        let result = run_ffmpeg_preview(
-            &app,
-            &path,
-            duration,
-            source_height,
-            &info,
-            &tmp,
-            first_strategy,
-        );
-        if let Err(remux_error) = result {
-            let _ = std::fs::remove_file(&tmp);
-            if first_strategy == PreviewStrategy::Transcode {
-                return Err(remux_error);
-            }
-            run_ffmpeg_preview(
-                &app,
-                &path,
-                duration,
-                source_height,
-                &info,
-                &tmp,
-                PreviewStrategy::Transcode,
-            )
-            .map_err(|fallback_error| {
-                format!(
-                    "Fast preview remux failed ({remux_error}); \
-                     fallback preview encoding failed: {fallback_error}"
-                )
-            })?;
-        }
+        encode_preview(&app, &path, duration, source_height, &info, &tmp, strategy)?;
 
         std::fs::rename(&tmp, &preview).map_err(|e| e.to_string())?;
         let _ = app.emit(
@@ -200,6 +166,72 @@ pub async fn generate_proxy(
     .map_err(|e| e.to_string())?
 }
 
+fn encode_preview(
+    app: &tauri::AppHandle,
+    path: &str,
+    duration: f64,
+    source_height: u32,
+    info: &VideoInfo,
+    tmp: &Path,
+    strategy: PreviewStrategy,
+) -> Result<(), String> {
+    let mut remux_error = None;
+    if strategy != PreviewStrategy::Transcode {
+        match run_ffmpeg_preview(
+            app,
+            path,
+            duration,
+            source_height,
+            info,
+            tmp,
+            PreviewStrategy::Remux,
+            false,
+        ) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                remux_error = Some(error);
+                let _ = std::fs::remove_file(tmp);
+            }
+        }
+    }
+    match run_ffmpeg_preview(
+        app,
+        path,
+        duration,
+        source_height,
+        info,
+        tmp,
+        PreviewStrategy::Transcode,
+        false,
+    ) {
+        Ok(()) => return Ok(()),
+        Err(vt_error) => {
+            let _ = std::fs::remove_file(tmp);
+            run_ffmpeg_preview(
+                app,
+                path,
+                duration,
+                source_height,
+                info,
+                tmp,
+                PreviewStrategy::Transcode,
+                true,
+            )
+            .map_err(|sw_error| match remux_error {
+                Some(remux) => format!(
+                    "Fast preview remux failed ({remux}); \
+                     hardware preview encoding failed ({vt_error}); \
+                     software preview encoding failed: {sw_error}"
+                ),
+                None => format!(
+                    "Hardware preview encoding failed ({vt_error}); \
+                     software preview encoding failed: {sw_error}"
+                ),
+            })
+        }
+    }
+}
+
 fn run_ffmpeg_preview(
     app: &tauri::AppHandle,
     path: &str,
@@ -208,6 +240,7 @@ fn run_ffmpeg_preview(
     info: &VideoInfo,
     tmp: &Path,
     strategy: PreviewStrategy,
+    software: bool,
 ) -> Result<(), String> {
     let audio_map = probe::preferred_audio_stream(info)
         .map(|index| format!("0:{index}?"))
@@ -223,7 +256,7 @@ fn run_ffmpeg_preview(
         "-progress".into(),
         "pipe:1".into(),
     ];
-    if strategy == PreviewStrategy::Transcode {
+    if strategy == PreviewStrategy::Transcode && !software {
         args.extend(["-hwaccel".into(), "videotoolbox".into()]);
     }
     args.extend([
@@ -237,6 +270,21 @@ fn run_ffmpeg_preview(
 
     if strategy == PreviewStrategy::Remux {
         args.extend(["-c:v".into(), "copy".into()]);
+    } else if software {
+        let target_height = source_height.min(360);
+        let target_height = target_height - (target_height % 2);
+        args.extend([
+            "-vf".into(),
+            format!("scale=-2:{}", target_height.max(2)),
+            "-c:v".into(),
+            "libx264".into(),
+            "-preset".into(),
+            "veryfast".into(),
+            "-pix_fmt".into(),
+            "yuv420p".into(),
+            "-b:v".into(),
+            "1000k".into(),
+        ]);
     } else {
         let target_height = source_height.min(360);
         let target_height = target_height - (target_height % 2);

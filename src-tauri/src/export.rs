@@ -18,6 +18,7 @@ pub struct ExportResult {
     pub muted_duration: f64,
     pub size_bytes: u64,
     pub segments: usize,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -26,11 +27,16 @@ struct Keep {
     outpoint: f64,
 }
 
+struct SegmentPlan {
+    keeps: Vec<Keep>,
+    warnings: Vec<String>,
+}
+
 /// Merge overlapping cuts, complement them into keep-segments, and snap each
 /// keep-segment start forward to the next keyframe. Snapping forward means we
 /// only ever remove slightly MORE than marked — never leak scary frames back
 /// in — and every segment starts clean for lossless stream copy.
-fn plan_segments(cuts: &[Cut], keyframes: &[f64], duration: f64) -> Result<Vec<Keep>, String> {
+fn plan_segments(cuts: &[Cut], keyframes: &[f64], duration: f64) -> Result<SegmentPlan, String> {
     let mut cuts: Vec<Cut> = cuts
         .iter()
         .map(|c| Cut {
@@ -67,6 +73,7 @@ fn plan_segments(cuts: &[Cut], keyframes: &[f64], duration: f64) -> Result<Vec<K
     }
 
     let mut snapped: Vec<Keep> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
     for k in keeps {
         let inpoint = if k.inpoint <= 0.001 {
             0.0
@@ -79,7 +86,14 @@ fn plan_segments(cuts: &[Cut], keyframes: &[f64], duration: f64) -> Result<Vec<K
                 .copied()
             {
                 Some(kf) => kf + 0.001,
-                None => continue, // no keyframe left before end of file
+                None => {
+                    warnings.push(format!(
+                        "Dropped {:.1}s–{:.1}s: no keyframe remains after that point, \
+                         so it cannot be copied losslessly.",
+                        k.inpoint, k.outpoint
+                    ));
+                    continue;
+                }
             }
         };
         if k.outpoint - inpoint > 0.2 {
@@ -92,7 +106,10 @@ fn plan_segments(cuts: &[Cut], keyframes: &[f64], duration: f64) -> Result<Vec<K
     if snapped.is_empty() {
         return Err("nothing left to export — the cuts remove the whole movie".into());
     }
-    Ok(snapped)
+    Ok(SegmentPlan {
+        keeps: snapped,
+        warnings,
+    })
 }
 
 fn map_mutes_to_output(mutes: &[Cut], keeps: &[Keep]) -> Vec<Cut> {
@@ -177,12 +194,15 @@ pub async fn export_video(
     duration: f64,
 ) -> Result<ExportResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let keeps = plan_segments(&cuts, &keyframes, duration)?;
+        let dir = media::cache_dir_for(&app, &path)?;
+        let _guard = media::JobGuard::acquire(format!("export:{}", dir.display()))?;
+        let plan = plan_segments(&cuts, &keyframes, duration)?;
+        let keeps = plan.keeps;
+        let warnings = plan.warnings;
         let kept: f64 = keeps.iter().map(|k| k.outpoint - k.inpoint).sum();
         let output_mutes = map_mutes_to_output(&mutes, &keeps);
         let muted_duration: f64 = output_mutes.iter().map(|mute| mute.end - mute.start).sum();
 
-        let dir = media::cache_dir_for(&app, &path)?;
         let list_path = dir.join("export.ffconcat");
         {
             let mut f = std::fs::File::create(&list_path).map_err(|e| e.to_string())?;
@@ -279,6 +299,7 @@ pub async fn export_video(
             muted_duration,
             size_bytes: size,
             segments: keeps.len(),
+            warnings,
         })
     })
     .await
@@ -306,7 +327,7 @@ mod tests {
             },
         ];
         let keyframes: Vec<f64> = (0..30).map(|i| i as f64 * 4.170).collect();
-        let keeps = plan_segments(&cuts, &keyframes, 100.0).unwrap();
+        let keeps = plan_segments(&cuts, &keyframes, 100.0).unwrap().keeps;
         assert_eq!(keeps.len(), 3);
         assert_eq!(keeps[0].inpoint, 0.0);
         assert!((keeps[0].outpoint - 10.0).abs() < 1e-9);
@@ -370,6 +391,19 @@ mod tests {
             end: 100.0,
         }];
         assert!(plan_segments(&cuts, &[0.0], 100.0).is_err());
+    }
+
+    #[test]
+    fn plan_warns_when_a_keep_has_no_later_keyframe() {
+        let cuts = vec![Cut {
+            start: 10.0,
+            end: 20.0,
+        }];
+        let plan = plan_segments(&cuts, &[0.0, 4.0, 8.0], 100.0).unwrap();
+        assert_eq!(plan.keeps.len(), 1);
+        assert_eq!(plan.keeps[0].inpoint, 0.0);
+        assert_eq!(plan.warnings.len(), 1);
+        assert!(plan.warnings[0].contains("20"));
     }
 
     #[test]

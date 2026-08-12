@@ -111,6 +111,7 @@ export interface ExportResult {
   mutedDuration: number;
   sizeBytes: number;
   segments: number;
+  warnings: string[];
 }
 
 export type EventStatus = "pending" | "cut" | "mute" | "kept";

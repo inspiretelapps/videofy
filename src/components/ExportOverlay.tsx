@@ -56,6 +56,11 @@ export default function ExportOverlay() {
                 : ""}
               {fmtBytes(exporting.result.sizeBytes)} · original quality.
             </p>
+            {exporting.result.warnings?.length > 0 && (
+              <p className="mt-3 text-[11px] leading-relaxed text-amber">
+                {exporting.result.warnings.join(" ")}
+              </p>
+            )}
             <p className="mt-3 truncate font-mono text-[11px] text-faint">
               {exporting.result.outPath}
             </p>

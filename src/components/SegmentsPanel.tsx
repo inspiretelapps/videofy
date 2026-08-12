@@ -46,6 +46,10 @@ export default function SegmentsPanel() {
   const eventStatus = useStore((state) => state.eventStatus);
   const manualCuts = useStore((state) => state.manualCuts);
   const bulkSetStatus = useStore((state) => state.bulkSetStatus);
+  const acceptPendingMutes = useStore((state) => state.acceptPendingMutes);
+  const acceptHighCuts = useStore((state) => state.acceptHighCuts);
+  const undoStatusChange = useStore((state) => state.undoStatusChange);
+  const eventStatusUndo = useStore((state) => state.eventStatusUndo);
   const removeManualCut = useStore((state) => state.removeManualCut);
   const selection = useStore((state) => state.selection);
   const sortBy = useStore((state) => state.sortBy);
@@ -218,6 +222,28 @@ export default function SegmentsPanel() {
             </BulkButton>
           </div>
         )}
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          <button
+            onClick={acceptPendingMutes}
+            className="rounded border border-seam px-2 py-1 text-[10px] text-dust hover:text-glow"
+          >
+            Mute all suggested
+          </button>
+          <button
+            onClick={acceptHighCuts}
+            className="rounded border border-seam px-2 py-1 text-[10px] text-dust hover:text-glow"
+          >
+            Cut all high
+          </button>
+          {eventStatusUndo && (
+            <button
+              onClick={undoStatusChange}
+              className="rounded border border-amber/40 px-2 py-1 text-[10px] text-amber hover:text-glow"
+            >
+              Undo
+            </button>
+          )}
+        </div>
 
         <button
           onClick={() => setShowGuide((value) => !value)}

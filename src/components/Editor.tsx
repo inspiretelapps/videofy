@@ -14,6 +14,13 @@ export default function Editor() {
   const exportMovie = useStore((s) => s.exportMovie);
   const keyframesReady = useStore((s) => s.keyframesReady);
   const keyframesError = useStore((s) => s.keyframesError);
+  const analysisError = useStore((s) => s.analysisError);
+  const analyzing = useStore((s) => s.analyzing);
+  const rebuildingPreview = useStore((s) => s.rebuildingPreview);
+  const waveform = useStore((s) => s.waveform);
+  const waveformPct = useStore((s) => s.waveformPct);
+  const analysisPct = useStore((s) => s.analysisPct);
+  const scans = useStore((s) => s.scans);
   const editCount = useStore((state) => {
     const edits = deriveEdits({
       events: state.events,
@@ -24,6 +31,28 @@ export default function Editor() {
   });
 
   if (!info) return null;
+
+  const exportBlocked =
+    !keyframesReady || analyzing || rebuildingPreview;
+  const exportTitle = rebuildingPreview
+    ? "Wait for the compatible preview to finish"
+    : analyzing
+      ? "Wait for the loudness pass to finish"
+      : keyframesReady
+        ? "Export from the untouched original movie"
+        : (keyframesError ?? "Preparing the lossless export map");
+
+  const statusBits = [
+    !waveform && waveformPct > 0
+      ? `Waveform ${Math.floor(waveformPct)}%`
+      : null,
+    analyzing ? `Loudness ${Math.floor(analysisPct)}%` : null,
+    scans.text.running ? `Text ${Math.floor(scans.text.pct)}%` : null,
+    scans.audio.running ? `Sound ${Math.floor(scans.audio.pct)}%` : null,
+    scans.guide.running ? "Guide…" : null,
+  ].filter(Boolean);
+
+  const banner = keyframesError || analysisError;
 
   return (
     <div className="relative flex h-full flex-col">
@@ -46,13 +75,9 @@ export default function Editor() {
           </span>
         </p>
         <button
-          disabled={!keyframesReady}
+          disabled={exportBlocked}
           onClick={() => void exportMovie()}
-          title={
-            keyframesReady
-              ? "Export from the untouched original movie"
-              : keyframesError ?? "Preparing the lossless export map"
-          }
+          title={exportTitle}
           className="rounded-md bg-glow px-4 py-1.5 text-sm font-semibold text-well transition-colors hover:bg-white disabled:cursor-wait disabled:opacity-45"
         >
           {keyframesReady
@@ -60,6 +85,17 @@ export default function Editor() {
             : "Preparing export…"}
         </button>
       </header>
+
+      {banner && (
+        <p className="shrink-0 border-b border-flare/30 bg-flare/10 px-4 py-1.5 text-center text-[11px] text-glow">
+          {banner}
+        </p>
+      )}
+      {statusBits.length > 0 && (
+        <p className="shrink-0 border-b border-seam bg-bay/40 px-4 py-1 text-center font-mono text-[10px] text-faint">
+          {statusBits.join(" · ")}
+        </p>
+      )}
 
       <div className="flex min-h-0 flex-1">
         <main className="flex min-w-0 flex-1 flex-col">

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useStore } from "../store";
+import { deriveEdits, useStore } from "../store";
 
 const REVERSE_STEP_S = 0.08; // seek-step cadence for reverse shuttle
 // Every playhead push repaints the timeline and re-runs a store subscription
@@ -7,6 +7,7 @@ const REVERSE_STEP_S = 0.08; // seek-step cadence for reverse shuttle
 // thread and made clicks feel dead. 25/sec is smooth to the eye and leaves the
 // UI responsive.
 const PLAYHEAD_PUSH_MS = 40;
+const DEBUG_PLAYER = import.meta.env.DEV;
 
 type SinkCapableMedia = HTMLMediaElement & {
   setSinkId?: (id: string) => Promise<void>;
@@ -19,24 +20,39 @@ export default function Player() {
   const infoPath = useStore((s) => s.info?.path);
   const shuttle = useStore((s) => s.shuttle);
   const seekReq = useStore((s) => s.seekReq);
+  const skipCuts = useStore((s) => s.skipCuts);
   const setPlayhead = useStore((s) => s.setPlayhead);
+  const cuts = useStore((s) =>
+    deriveEdits({
+      events: s.events,
+      eventStatus: s.eventStatus,
+      manualCuts: s.manualCuts,
+    }).cuts,
+  );
   const videoRef = useRef<HTMLVideoElement>(null);
   const rafRef = useRef(0);
   const shuttleRef = useRef(0);
+  const cutsRef = useRef(cuts);
+  const skipCutsRef = useRef(skipCuts);
   const rebuildAttemptedRef = useRef(false);
+  const retriedLoadRef = useRef(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [mediaState, setMediaState] = useState("loading…");
   const [audioReport, setAudioReport] = useState("audio: not started");
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [sinkId, setSinkId] = useState("");
-
-  // Deliberately NOT routed through Web Audio. In Safari,
-  // createMediaElementSource on cross-origin media (this video is served from
-  // asset.localhost, the page from tauri.localhost) silences the element
-  // outright — the diagnostic would have become the bug. Safari exposes a
-  // decoded-byte counter instead, which measures the same thing and touches
-  // nothing.
   const audioBytesRef = useRef(0);
+
+  cutsRef.current = cuts;
+  skipCutsRef.current = skipCuts;
+
+  const skipIfInsideCut = (time: number): number => {
+    if (!skipCutsRef.current) return time;
+    const hit = cutsRef.current.find(
+      (cut) => time >= cut.start && time < cut.end,
+    );
+    return hit ? hit.end : time;
+  };
 
   const requestCompatiblePreview = () => {
     const state = useStore.getState();
@@ -51,18 +67,28 @@ export default function Player() {
     });
   };
 
+  const handleUnsupported = (video: HTMLVideoElement) => {
+    // Fast cache hits can race the asset protocol. Reload once before
+    // throwing away a preview that already played on first import.
+    if (!retriedLoadRef.current) {
+      retriedLoadRef.current = true;
+      video.load();
+      return;
+    }
+    requestCompatiblePreview();
+  };
+
   useEffect(() => {
     rebuildAttemptedRef.current = false;
+    retriedLoadRef.current = false;
   }, [infoPath]);
 
   useEffect(() => {
+    retriedLoadRef.current = false;
     setPlaybackError(null);
     setMediaState("loading…");
-  }, [infoPath, proxyUrl]);
+  }, [proxyUrl]);
 
-  // Independent of the video: an oscillator proves whether this webview can
-  // make any sound at all, which splits "the app cannot play audio" from
-  // "this particular file's audio never arrives".
   const playTestTone = () => {
     try {
       const Ctor =
@@ -93,8 +119,11 @@ export default function Player() {
     shuttleRef.current = shuttle;
   }, [shuttle]);
 
-  // Output device picker, when the webview supports routing at all.
   useEffect(() => {
+    if (!DEBUG_PLAYER) {
+      setDevices([]);
+      return;
+    }
     const supported = "setSinkId" in HTMLMediaElement.prototype;
     if (!supported) {
       setDevices([]);
@@ -114,18 +143,12 @@ export default function Player() {
     });
   }, [sinkId]);
 
-  // seek requests from the timeline / panel
   useEffect(() => {
     const v = videoRef.current;
-    if (v && Number.isFinite(seekReq.t)) v.currentTime = seekReq.t;
+    if (!v || !Number.isFinite(seekReq.t)) return;
+    v.currentTime = skipIfInsideCut(seekReq.t);
   }, [seekReq]);
 
-  // Forward shuttle uses native playback; reverse pauses and step-seeks below.
-  //
-  // useLayoutEffect, not useEffect: WKWebView only allows audio to start inside
-  // the user gesture that asked for it. A passive effect runs after paint, by
-  // which point the gesture has expired and playback is either silent or
-  // refused outright. Layout effects flush in the same task as the click.
   useLayoutEffect(() => {
     const v = videoRef.current;
     if (!v || rebuildingPreview) return;
@@ -142,7 +165,7 @@ export default function Player() {
               ? error.name
               : "";
           if (name === "NotSupportedError") {
-            requestCompatiblePreview();
+            handleUnsupported(v);
             return;
           }
           setPlaybackError(String(error));
@@ -154,7 +177,6 @@ export default function Player() {
     }
   }, [shuttle, rebuildingPreview]);
 
-  // report time while playing; drive reverse shuttle with stepped seeks
   useEffect(() => {
     let last = performance.now();
     let reverseAcc = 0;
@@ -177,14 +199,16 @@ export default function Player() {
           }
         } else if (!v.paused && now - lastPush >= PLAYHEAD_PUSH_MS) {
           lastPush = now;
-          setPlayhead(v.currentTime);
+          const skipped = skipIfInsideCut(v.currentTime);
+          if (skipped > v.currentTime + 0.04) {
+            v.currentTime = skipped;
+            setPlayhead(skipped);
+          } else {
+            setPlayhead(v.currentTime);
+          }
         }
-        if (now - lastReport >= 500) {
+        if (DEBUG_PLAYER && now - lastReport >= 500) {
           lastReport = now;
-          // audioTracks is the question that matters: does the webview
-          // believe this file has audio at all? If it reports 0 while ffprobe
-          // and VLC both see a stereo AAC track, the container is being
-          // parsed wrong and no amount of volume will help.
           const media = v as HTMLVideoElement & {
             audioTracks?: { length: number };
             webkitAudioDecodedByteCount?: number;
@@ -197,7 +221,9 @@ export default function Player() {
           setAudioReport(
             `audio: tracks=${trackCount} ready=${v.readyState} net=${v.networkState}` +
               ` vol=${v.volume} muted=${v.muted}` +
-              (decoded === undefined ? "" : ` bytes=${(decoded / 1024).toFixed(0)}KB`) +
+              (decoded === undefined
+                ? ""
+                : ` bytes=${(decoded / 1024).toFixed(0)}KB`) +
               (v.paused ? " (paused)" : ""),
           );
         }
@@ -231,8 +257,11 @@ export default function Player() {
           }}
           onError={(e) => {
             const err = e.currentTarget.error;
-            if (err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
-              requestCompatiblePreview();
+            if (
+              err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ||
+              err?.code === MediaError.MEDIA_ERR_DECODE
+            ) {
+              handleUnsupported(e.currentTarget);
               return;
             }
             setPlaybackError(
@@ -244,20 +273,23 @@ export default function Player() {
         <p className="text-sm text-faint">No preview available</p>
       )}
 
-      <div className="pointer-events-none absolute top-2 left-2 rounded bg-well/70 px-2 py-1 font-mono text-[10px] text-faint">
-        <span>{mediaState}</span>
-        <span className="ml-2">{audioReport}</span>
-      </div>
+      {DEBUG_PLAYER && (
+        <>
+          <div className="pointer-events-none absolute top-2 left-2 rounded bg-well/70 px-2 py-1 font-mono text-[10px] text-faint">
+            <span>{mediaState}</span>
+            <span className="ml-2">{audioReport}</span>
+          </div>
+          <button
+            onClick={playTestTone}
+            title="Play a 440Hz beep straight from the webview, bypassing the video"
+            className="absolute bottom-2 left-2 rounded border border-seam bg-well/80 px-2 py-1 text-[10px] text-dust hover:text-glow"
+          >
+            Test sound
+          </button>
+        </>
+      )}
 
-      <button
-        onClick={playTestTone}
-        title="Play a 440Hz beep straight from the webview, bypassing the video"
-        className="absolute bottom-2 left-2 rounded border border-seam bg-well/80 px-2 py-1 text-[10px] text-dust hover:text-glow"
-      >
-        Test sound
-      </button>
-
-      {devices.length > 0 && (
+      {DEBUG_PLAYER && devices.length > 0 && (
         <select
           value={sinkId}
           onChange={(event) => setSinkId(event.target.value)}

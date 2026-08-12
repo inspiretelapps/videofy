@@ -26,6 +26,14 @@ export type Sensitivity = "strict" | "balanced" | "sensitive";
 export type SortBy = "time" | "severity" | "confidence";
 export type MinSeverity = 1 | 2 | 3;
 
+function previewSrc(path: string): string {
+  const src = convertFileSrc(path);
+  // WKWebView caches media by URL. Re-opening the same cached preview without
+  // a cache-buster is how a file that played on first import failed on the
+  // second open with NotSupportedError.
+  return `${src}${src.includes("?") ? "&" : "?"}t=${Date.now()}`;
+}
+
 const SENSITIVITY_VALUE: Record<Sensitivity, number> = {
   strict: 0.25,
   balanced: 0.5,
@@ -121,6 +129,8 @@ interface State {
   shuttle: number;
   seekReq: { t: number; n: number };
   view: { t0: number; t1: number };
+  skipCuts: boolean;
+  eventStatusUndo: Record<string, EventStatus> | null;
   exporting: ExportState | null;
 
   settings: Settings;
@@ -142,6 +152,10 @@ interface State {
   select: (selection: Selection | null) => void;
   setEventStatus: (id: string, status: EventStatus) => void;
   bulkSetStatus: (ids: string[], status: EventStatus) => void;
+  acceptPendingMutes: () => void;
+  acceptHighCuts: () => void;
+  undoStatusChange: () => void;
+  setSkipCuts: (value: boolean) => void;
   setSortBy: (sort: SortBy) => void;
   setMinSeverity: (severity: MinSeverity) => void;
   toggleCategory: (category: ContentCategory) => void;
@@ -221,6 +235,8 @@ export const useStore = create<State>()((set, get) => ({
   shuttle: 0,
   seekReq: { t: 0, n: 0 },
   view: { t0: 0, t1: 1 },
+  skipCuts: false,
+  eventStatusUndo: null,
   exporting: null,
   settings: storedSettings,
   guideTitle: "",
@@ -278,7 +294,7 @@ export const useStore = create<State>()((set, get) => ({
       for (const event of events) statuses[event.id] ??= "pending";
       set({
         stage: "editor",
-        proxyUrl: convertFileSrc(proxyPath),
+        proxyUrl: previewSrc(proxyPath),
         rebuildingPreview: false,
         keyframes: [],
         keyframesReady: false,
@@ -481,7 +497,7 @@ export const useStore = create<State>()((set, get) => ({
       });
       if (get().info?.path !== info.path) return;
       set({
-        proxyUrl: convertFileSrc(proxyPath),
+        proxyUrl: previewSrc(proxyPath),
         rebuildingPreview: false,
       });
     } catch (error) {
@@ -497,6 +513,7 @@ export const useStore = create<State>()((set, get) => ({
       info: null,
       proxyUrl: null,
       rebuildingPreview: false,
+      eventStatusUndo: null,
       keyframes: [],
       keyframesReady: false,
       keyframesError: null,
@@ -569,11 +586,43 @@ export const useStore = create<State>()((set, get) => ({
     scheduleProjectSave(get);
   },
   bulkSetStatus: (ids, status) => {
-    const statuses = { ...get().eventStatus };
-    for (const id of ids) statuses[id] = status;
-    set({ eventStatus: statuses, checkedIds: [] });
+    if (ids.length === 0) return;
+    const eventStatus = { ...get().eventStatus };
+    const eventStatusUndo = { ...get().eventStatus };
+    for (const id of ids) eventStatus[id] = status;
+    set({ eventStatus, eventStatusUndo, checkedIds: [] });
     scheduleProjectSave(get);
   },
+  acceptPendingMutes: () => {
+    const { events, eventStatus } = get();
+    const ids = events
+      .filter(
+        (event) =>
+          (eventStatus[event.id] ?? "pending") === "pending" &&
+          event.suggestedAction === "mute",
+      )
+      .map((event) => event.id);
+    get().bulkSetStatus(ids, "mute");
+  },
+  acceptHighCuts: () => {
+    const { events, eventStatus } = get();
+    const ids = events
+      .filter(
+        (event) =>
+          (eventStatus[event.id] ?? "pending") === "pending" &&
+          event.severity === 3 &&
+          event.suggestedAction === "cut",
+      )
+      .map((event) => event.id);
+    get().bulkSetStatus(ids, "cut");
+  },
+  undoStatusChange: () => {
+    const undo = get().eventStatusUndo;
+    if (!undo) return;
+    set({ eventStatus: undo, eventStatusUndo: null });
+    scheduleProjectSave(get);
+  },
+  setSkipCuts: (skipCuts) => set({ skipCuts }),
   setSortBy: (sortBy) => set({ sortBy }),
   setMinSeverity: (minSeverity) => set({ minSeverity }),
   toggleCategory: (category) => {
@@ -837,8 +886,20 @@ export const useStore = create<State>()((set, get) => ({
   },
 
   exportMovie: async () => {
-    const { info, keyframes, keyframesReady, keyframesError } = get();
+    const { info, keyframes, keyframesReady, keyframesError, analyzing } = get();
     if (!info || get().exporting?.running) return;
+    if (analyzing || get().rebuildingPreview) {
+      set({
+        exporting: {
+          running: false,
+          pct: 0,
+          result: null,
+          error:
+            "Wait until the preview and loudness pass finish before exporting. They share ffmpeg with the lossless copy.",
+        },
+      });
+      return;
+    }
     if (!keyframesReady) {
       set({
         exporting: {

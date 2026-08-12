@@ -7,6 +7,8 @@ export default function TransportBar() {
   const playhead = useStore((s) => s.playhead);
   const seekTo = useStore((s) => s.seekTo);
   const pendingIn = useStore((s) => s.pendingIn);
+  const skipCuts = useStore((s) => s.skipCuts);
+  const setSkipCuts = useStore((s) => s.setSkipCuts);
   const info = useStore((s) => s.info);
   const zoomBy = useStore((s) => s.zoomBy);
   const zoomToFit = useStore((s) => s.zoomToFit);
@@ -64,6 +66,18 @@ export default function TransportBar() {
           IN {fmtTime(pendingIn, true)} — press O to finish the cut
         </p>
       )}
+
+      <button
+        onClick={() => setSkipCuts(!skipCuts)}
+        title="Skip approved cuts while playing"
+        className={`rounded px-2 py-1 text-[11px] ${
+          skipCuts
+            ? "bg-glow/15 text-glow"
+            : "text-faint hover:bg-seam hover:text-glow"
+        }`}
+      >
+        {skipCuts ? "Skipping cuts" : "Play all"}
+      </button>
 
       <div className="ml-auto hidden items-center gap-3 font-mono text-[10px] text-faint lg:flex">
         <Hint k="J K L">shuttle</Hint>

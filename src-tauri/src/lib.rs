@@ -25,6 +25,7 @@ pub fn run() {
             proxy::generate_proxy,
             export::export_video,
             waveform::get_waveform,
+            media::check_media_tools,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

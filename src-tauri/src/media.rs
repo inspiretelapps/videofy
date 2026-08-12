@@ -38,6 +38,39 @@ pub fn ffprobe_path() -> String {
     find_tool("ffprobe")
 }
 
+fn tool_works(path: &str) -> bool {
+    Command::new(path)
+        .arg("-version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaToolsStatus {
+    pub ffmpeg: bool,
+    pub ffprobe: bool,
+    pub ffmpeg_path: String,
+    pub ffprobe_path: String,
+}
+
+/// Used on the welcome screen so a missing Homebrew ffmpeg is a clear
+/// message instead of a spawn error after the user drops a movie.
+#[tauri::command]
+pub fn check_media_tools() -> MediaToolsStatus {
+    let ffmpeg_path = ffmpeg_path();
+    let ffprobe_path = ffprobe_path();
+    MediaToolsStatus {
+        ffmpeg: tool_works(&ffmpeg_path),
+        ffprobe: tool_works(&ffprobe_path),
+        ffmpeg_path,
+        ffprobe_path,
+    }
+}
+
 /// Everything the analysis passes need from their environment: somewhere to
 /// cache per-movie results, somewhere to keep downloaded models, and a way to
 /// report progress. Implemented by the Tauri app at runtime and by
