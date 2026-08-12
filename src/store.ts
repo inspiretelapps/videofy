@@ -27,11 +27,10 @@ export type SortBy = "time" | "severity" | "confidence";
 export type MinSeverity = 1 | 2 | 3;
 
 function previewSrc(path: string): string {
-  const src = convertFileSrc(path);
-  // WKWebView caches media by URL. Re-opening the same cached preview without
-  // a cache-buster is how a file that played on first import failed on the
-  // second open with NotSupportedError.
-  return `${src}${src.includes("?") ? "&" : "?"}t=${Date.now()}`;
+  // Do not append a query string. WKWebView's asset protocol treats `?t=` as
+  // part of the file path and fails with NotSupportedError — the same error
+  // we were trying to cache-bust.
+  return convertFileSrc(path);
 }
 
 const SENSITIVITY_VALUE: Record<Sensitivity, number> = {
