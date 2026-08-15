@@ -1,8 +1,51 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use tauri::Manager;
+
+struct ToolPaths {
+    ffmpeg: String,
+    ffprobe: String,
+}
+
+static TOOLS: OnceLock<ToolPaths> = OnceLock::new();
+
+/// Prefer the ffmpeg copied into the .app, then Homebrew. Finder-launched
+/// apps do not inherit a shell PATH, so the bundled copy is what makes
+/// double-click work on a machine that never ran `brew install`.
+pub fn init_tools(app: &tauri::AppHandle) {
+    let _ = TOOLS.get_or_init(|| resolve_tools(Some(app)));
+}
+
+fn resolve_tools(app: Option<&tauri::AppHandle>) -> ToolPaths {
+    let bundled = app.and_then(bundled_ffbin);
+    ToolPaths {
+        ffmpeg: pick_tool("ffmpeg", bundled.as_deref()),
+        ffprobe: pick_tool("ffprobe", bundled.as_deref()),
+    }
+}
+
+fn bundled_ffbin(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(resource) = app.path().resource_dir() {
+        dirs.push(resource.join("ffbin"));
+        dirs.push(resource.join("resources").join("ffbin"));
+    }
+    dirs.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/ffbin"));
+    dirs.into_iter().find(|dir| dir.join("ffmpeg").is_file())
+}
+
+fn pick_tool(name: &str, bundled_dir: Option<&Path>) -> String {
+    if let Some(dir) = bundled_dir {
+        let candidate = dir.join(name);
+        if tool_works(&candidate.to_string_lossy()) {
+            return candidate.to_string_lossy().into_owned();
+        }
+    }
+    find_tool(name)
+}
 
 /// GUI apps launched from Finder don't inherit the shell PATH, so fall back to
 /// the common Homebrew/MacPorts install locations.
@@ -31,11 +74,17 @@ fn which(name: &str) -> Result<String, ()> {
 }
 
 pub fn ffmpeg_path() -> String {
-    find_tool("ffmpeg")
+    TOOLS
+        .get()
+        .map(|tools| tools.ffmpeg.clone())
+        .unwrap_or_else(|| find_tool("ffmpeg"))
 }
 
 pub fn ffprobe_path() -> String {
-    find_tool("ffprobe")
+    TOOLS
+        .get()
+        .map(|tools| tools.ffprobe.clone())
+        .unwrap_or_else(|| find_tool("ffprobe"))
 }
 
 fn tool_works(path: &str) -> bool {
@@ -57,10 +106,11 @@ pub struct MediaToolsStatus {
     pub ffprobe_path: String,
 }
 
-/// Used on the welcome screen so a missing Homebrew ffmpeg is a clear
-/// message instead of a spawn error after the user drops a movie.
+/// Used on the welcome screen so a missing ffmpeg is a clear message
+/// instead of a spawn error after the user drops a movie.
 #[tauri::command]
-pub fn check_media_tools() -> MediaToolsStatus {
+pub fn check_media_tools(app: tauri::AppHandle) -> MediaToolsStatus {
+    init_tools(&app);
     let ffmpeg_path = ffmpeg_path();
     let ffprobe_path = ffprobe_path();
     MediaToolsStatus {
@@ -69,6 +119,13 @@ pub fn check_media_tools() -> MediaToolsStatus {
         ffmpeg_path,
         ffprobe_path,
     }
+}
+
+/// Stop in-flight ffmpeg/ffprobe work when the user closes a movie.
+#[tauri::command]
+pub fn cancel_jobs() {
+    kill_all_children();
+    clear_jobs();
 }
 
 /// Everything the analysis passes need from their environment: somewhere to
@@ -182,57 +239,106 @@ fn child_pids() -> &'static Mutex<HashSet<u32>> {
     PIDS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-/// Kill any ffmpeg/ffprobe children still running (called on app exit so a
-/// half-finished proxy or export doesn't linger as an orphan).
+/// Kill any ffmpeg/ffprobe children still running (called on app exit and
+/// when the user hits New movie, so a half-finished proxy or Whisper pass
+/// does not linger into the next film).
 pub fn kill_all_children() {
     let pids: Vec<u32> = child_pids()
         .lock()
         .map(|s| s.iter().copied().collect())
         .unwrap_or_default();
     for pid in pids {
+        #[cfg(unix)]
+        {
+            // spawn() puts each child in its own process group so -PID
+            // reaps ffmpeg helpers too.
+            let _ = Command::new("kill")
+                .args(["-9", &format!("-{pid}")])
+                .status();
+        }
         let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+    }
+    if let Ok(mut set) = child_pids().lock() {
+        set.clear();
     }
 }
 
 /// Tracks which cache dirs have a job running, so a duplicate import can't
-/// start a second ffmpeg racing on the same output files.
-fn jobs_in_flight() -> &'static Mutex<HashSet<String>> {
-    static JOBS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    JOBS.get_or_init(|| Mutex::new(HashSet::new()))
+/// start a second ffmpeg racing on the same output files. Values are
+/// generation ids so a cancelled JobGuard cannot clear a newer run of the
+/// same movie.
+fn jobs_in_flight() -> &'static Mutex<HashMap<String, u64>> {
+    static JOBS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+    JOBS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub struct JobGuard(String);
+fn next_job_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+pub struct JobGuard {
+    key: String,
+    id: u64,
+}
 
 impl JobGuard {
     pub fn acquire(key: String) -> Result<Self, String> {
         let mut jobs = jobs_in_flight().lock().map_err(|e| e.to_string())?;
-        if !jobs.insert(key.clone()) {
+        if jobs.contains_key(&key) {
             return Err("This movie is already being processed.".into());
         }
-        Ok(JobGuard(key))
+        let id = next_job_id();
+        jobs.insert(key.clone(), id);
+        Ok(JobGuard { key, id })
     }
 }
 
 impl Drop for JobGuard {
     fn drop(&mut self) {
         if let Ok(mut jobs) = jobs_in_flight().lock() {
-            jobs.remove(&self.0);
+            if jobs.get(&self.key) == Some(&self.id) {
+                jobs.remove(&self.key);
+            }
         }
     }
 }
 
+fn clear_jobs() {
+    if let Ok(mut jobs) = jobs_in_flight().lock() {
+        jobs.clear();
+    }
+}
+
 pub fn spawn(cmd: &str, args: &[&str]) -> Result<Child, String> {
-    let child = Command::new(cmd)
+    let mut command = Command::new(cmd);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let child = command
         .spawn()
         .map_err(|e| format!("failed to start {cmd}: {e}"))?;
     if let Ok(mut pids) = child_pids().lock() {
         pids.insert(child.id());
     }
     Ok(child)
+}
+
+pub fn run_output(cmd: &str, args: &[&str]) -> Result<Output, String> {
+    let child = spawn(cmd, args)?;
+    let pid = child.id();
+    let output = child.wait_with_output().map_err(|e| e.to_string());
+    if let Ok(mut pids) = child_pids().lock() {
+        pids.remove(&pid);
+    }
+    output
 }
 
 /// Drains stderr on its own thread while the caller reads stdout. Without

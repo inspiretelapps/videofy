@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useStore } from "../store";
 import { fmtBytes } from "../lib/format";
+import { BUILD_STAMP } from "../lib/buildStamp";
 
 const VIDEO_EXTENSIONS = [
   "mp4", "mkv", "mov", "m4v", "avi", "webm", "ts", "m2ts", "mpg", "mpeg", "wmv", "flv",
@@ -80,8 +81,11 @@ export default function DropScreen() {
   return (
     <div className="flex h-full flex-col items-center justify-center px-10">
       <div className="rise-in w-full max-w-2xl">
-        <p className="mb-3 text-center font-mono text-[11px] tracking-[0.3em] text-faint uppercase">
+        <p className="mb-1 text-center font-mono text-[11px] tracking-[0.3em] text-faint uppercase">
           Videofy
+        </p>
+        <p className="mb-3 text-center font-mono text-[10px] text-faint">
+          {BUILD_STAMP}
         </p>
         <h1 className="text-center font-display text-5xl font-semibold tracking-tight text-glow">
           Movie night,
@@ -143,7 +147,8 @@ export default function DropScreen() {
             </div>
             {toolsMissing && (
               <p className="mt-4 text-center text-sm text-flare">
-                ffmpeg and ffprobe were not found. Install them with Homebrew
+                Videofy could not find ffmpeg. Reinstall the app from
+                Applications, or install ffmpeg with Homebrew
                 (`brew install ffmpeg`) and reopen Videofy.
               </p>
             )}

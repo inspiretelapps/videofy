@@ -104,8 +104,9 @@ pub async fn probe_video(path: String) -> Result<VideoInfo, String> {
 }
 
 pub fn probe_sync(path: &str) -> Result<VideoInfo, String> {
-    let out = std::process::Command::new(media::ffprobe_path())
-        .args([
+    let out = media::run_output(
+        &media::ffprobe_path(),
+        &[
             "-v",
             "error",
             "-print_format",
@@ -114,9 +115,8 @@ pub fn probe_sync(path: &str) -> Result<VideoInfo, String> {
             "-show_streams",
             "-show_chapters",
             path,
-        ])
-        .output()
-        .map_err(|e| format!("failed to run ffprobe: {e}"))?;
+        ],
+    )?;
     if !out.status.success() {
         return Err(format!(
             "ffprobe failed: {}",
@@ -253,8 +253,9 @@ pub async fn get_keyframes(app: tauri::AppHandle, path: String) -> Result<Vec<f6
                 return Ok(kf);
             }
         }
-        let out = std::process::Command::new(media::ffprobe_path())
-            .args([
+        let out = media::run_output(
+            &media::ffprobe_path(),
+            &[
                 "-v",
                 "error",
                 "-select_streams",
@@ -264,9 +265,8 @@ pub async fn get_keyframes(app: tauri::AppHandle, path: String) -> Result<Vec<f6
                 "-of",
                 "csv=p=0",
                 &path,
-            ])
-            .output()
-            .map_err(|e| format!("failed to run ffprobe: {e}"))?;
+            ],
+        )?;
         if !out.status.success() {
             return Err(format!(
                 "keyframe scan failed: {}",

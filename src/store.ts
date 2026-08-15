@@ -513,7 +513,8 @@ export const useStore = create<State>()((set, get) => ({
     }
   },
 
-  reset: () =>
+  reset: () => {
+    void invoke("cancel_jobs");
     set({
       stage: "welcome",
       info: null,
@@ -536,7 +537,8 @@ export const useStore = create<State>()((set, get) => ({
       shuttle: 0,
       exporting: null,
       subtitlePath: null,
-    }),
+    });
+  },
 
   setPlayhead: (time) => set({ playhead: time }),
   seekTo: (time) => {

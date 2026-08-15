@@ -15,6 +15,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            media::init_tools(&app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             probe::probe_video,
             probe::get_keyframes,
@@ -27,6 +31,7 @@ pub fn run() {
             export::export_video,
             waveform::get_waveform,
             media::check_media_tools,
+            media::cancel_jobs,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

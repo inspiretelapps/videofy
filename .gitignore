@@ -15,6 +15,9 @@ dist-ssr
 # Project notes are kept locally and are not published to GitHub.
 *.md
 
+# Homebrew ffmpeg copied into the .app at build time.
+src-tauri/resources/ffbin/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

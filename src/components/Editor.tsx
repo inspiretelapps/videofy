@@ -1,6 +1,7 @@
 import { useStore, deriveEdits } from "../store";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { fmtBytes, fmtTime } from "../lib/format";
+import { BUILD_STAMP } from "../lib/buildStamp";
 import Player from "./Player";
 import Timeline from "./Timeline";
 import SegmentsPanel from "./SegmentsPanel";
@@ -79,6 +80,9 @@ export default function Editor() {
         >
           ← New movie
         </button>
+        <p className="pointer-events-none shrink-0 font-mono text-[10px] text-faint">
+          {BUILD_STAMP}
+        </p>
         <p className="pointer-events-none min-w-0 flex-1 truncate text-center text-sm font-medium text-glow">
           {info.fileName}
           <span className="ml-3 font-mono text-[10px] text-faint">
