@@ -92,10 +92,58 @@ pub async fn lookup_content_guide(
         .map_err(|e| e.to_string())?
 }
 
-fn lookup_ddd(api_key: &str, title: &str, year: Option<i32>) -> Result<GuideResult, String> {
-    if api_key.trim().is_empty() {
-        return Err("A DoesTheDogDie.com API key is required.".into());
+fn resolve_ddd_api_key(provided: &str) -> Result<String, String> {
+    let provided = provided.trim();
+    if !provided.is_empty() {
+        return Ok(provided.to_string());
     }
+    if let Ok(from_env) = std::env::var("DOESTHEDOGDIE_API") {
+        let from_env = from_env.trim().to_string();
+        if !from_env.is_empty() {
+            return Ok(from_env);
+        }
+    }
+    let mut candidates = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join(".env.local"));
+        if let Some(parent) = cwd.parent() {
+            candidates.push(parent.join(".env.local"));
+        }
+    }
+    candidates.push(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join(".env.local"),
+    );
+    for path in candidates {
+        if let Some(key) = dotenv_value(&path, "DOESTHEDOGDIE_API") {
+            return Ok(key);
+        }
+    }
+    Err("A DoesTheDogDie.com API key is required. Add one in guide tools or in .env.local.".into())
+}
+
+fn dotenv_value(path: &std::path::Path, name: &str) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let prefix = format!("{name}=");
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+        let Some(value) = line.strip_prefix(&prefix) else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"').trim_matches('\'');
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn lookup_ddd(api_key: &str, title: &str, year: Option<i32>) -> Result<GuideResult, String> {
+    let api_key = resolve_ddd_api_key(api_key)?;
     let client = reqwest::blocking::Client::builder()
         .user_agent("Videofy/0.1.1")
         .build()
@@ -234,11 +282,15 @@ fn lookup_ddd(api_key: &str, title: &str, year: Option<i32>) -> Result<GuideResu
 }
 
 fn hms(h: Option<f64>, m: Option<f64>, s: Option<f64>) -> Option<f64> {
-    if h.is_none() && m.is_none() && s.is_none() {
-        None
-    } else {
-        Some(h.unwrap_or(0.0) * 3600.0 + m.unwrap_or(0.0) * 60.0 + s.unwrap_or(0.0))
+    // The API uses -1 as “no timestamp”, not a real timecode.
+    let parts = [h, m, s];
+    if parts.iter().all(Option::is_none) {
+        return None;
     }
+    if parts.iter().flatten().any(|value| *value < 0.0) {
+        return None;
+    }
+    Some(h.unwrap_or(0.0) * 3600.0 + m.unwrap_or(0.0) * 60.0 + s.unwrap_or(0.0))
 }
 
 fn parse_caption_file(input: &str, offset: f64) -> Vec<ContentEvent> {

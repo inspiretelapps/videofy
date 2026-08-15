@@ -448,17 +448,18 @@ function GuideTools() {
           type="password"
           value={settings.dddApiKey}
           onChange={(event) => updateSettings({ dddApiKey: event.target.value })}
-          placeholder="DoesTheDogDie.com API key"
+          placeholder="API key (optional if .env.local is set)"
           className="mt-1.5 w-full rounded border border-seam bg-well px-2 py-1 text-[11px] text-glow"
         />
         <p className="mt-1 text-[10px] leading-snug text-faint">
           <DddLink href={DDD_API}>Get a free key</DddLink>
           {" · "}
           <DddLink href={DDD_TERMS}>API terms</DddLink>
-          . Your key stays on this Mac and is never bundled with Videofy.
+          . Leave blank to use <span className="font-mono">.env.local</span> on
+          this Mac. The key is never committed or shipped to other people.
         </p>
         <button
-          disabled={!settings.dddApiKey || guideScan.running}
+          disabled={guideScan.running}
           onClick={() => void lookupGuide()}
           className="mt-1.5 w-full rounded bg-seam px-2 py-1 text-[11px] text-dust hover:text-glow disabled:opacity-40"
         >
