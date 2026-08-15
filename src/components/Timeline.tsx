@@ -50,7 +50,9 @@ export default function Timeline() {
     const el = wrapRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
-      setSize({ w: el.clientWidth, h: el.clientHeight });
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      setSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
     });
     ro.observe(el);
     return () => ro.disconnect();

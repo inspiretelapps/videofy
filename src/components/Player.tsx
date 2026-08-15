@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { deriveEdits, useStore } from "../store";
 
 const REVERSE_STEP_S = 0.08; // seek-step cadence for reverse shuttle
@@ -22,15 +22,14 @@ export default function Player() {
   const seekReq = useStore((s) => s.seekReq);
   const skipCuts = useStore((s) => s.skipCuts);
   const setPlayhead = useStore((s) => s.setPlayhead);
-  const cuts = useStore((s) =>
-    deriveEdits({
-      events: s.events,
-      eventStatus: s.eventStatus,
-      manualCuts: s.manualCuts,
-    }).cuts,
+  const events = useStore((s) => s.events);
+  const eventStatus = useStore((s) => s.eventStatus);
+  const manualCuts = useStore((s) => s.manualCuts);
+  const cuts = useMemo(
+    () => deriveEdits({ events, eventStatus, manualCuts }).cuts,
+    [events, eventStatus, manualCuts],
   );
   const videoRef = useRef<HTMLVideoElement>(null);
-  const stageRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef(0);
   const shuttleRef = useRef(0);
   const cutsRef = useRef(cuts);
@@ -42,7 +41,6 @@ export default function Player() {
   const [audioReport, setAudioReport] = useState("audio: not started");
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [sinkId, setSinkId] = useState("");
-  const [stageReady, setStageReady] = useState(false);
   const audioBytesRef = useRef(0);
 
   cutsRef.current = cuts;
@@ -90,28 +88,6 @@ export default function Player() {
     setPlaybackError(null);
     setMediaState("loading…");
   }, [proxyUrl]);
-
-  useEffect(() => {
-    const el = stageRef.current;
-    if (!el) return;
-    const ready = () => {
-      if (el.clientWidth > 8 && el.clientHeight > 8) setStageReady(true);
-    };
-    ready();
-    const ro = new ResizeObserver(ready);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    return () => {
-      if (!video) return;
-      video.pause();
-      video.removeAttribute("src");
-      video.load();
-    };
-  }, [proxyUrl, stageReady]);
 
   const playTestTone = () => {
     try {
@@ -259,11 +235,8 @@ export default function Player() {
   }, [setPlayhead]);
 
   return (
-    <div
-      ref={stageRef}
-      className="relative isolate flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-well [transform:translateZ(0)]"
-    >
-      {proxyUrl && stageReady ? (
+    <div className="relative isolate flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-well [transform:translateZ(0)]">
+      {proxyUrl ? (
         <video
           key={proxyUrl}
           ref={videoRef}
@@ -299,9 +272,7 @@ export default function Player() {
           }}
         />
       ) : (
-        <p className="text-sm text-faint">
-          {proxyUrl ? "Loading preview…" : "No preview available"}
-        </p>
+        <p className="text-sm text-faint">No preview available</p>
       )}
 
       {DEBUG_PLAYER && (
