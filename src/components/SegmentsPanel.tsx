@@ -8,6 +8,15 @@ import {
   type SortBy,
 } from "../store";
 import { fmtSeconds, fmtTime } from "../lib/format";
+import {
+  DDD_API,
+  DDD_HOME,
+  DDD_TERMS,
+  DddAttribution,
+  DddLink,
+  eventUsesDdd,
+  isDddSource,
+} from "../lib/ddd";
 import type {
   ContentCategory,
   ProfanityTier,
@@ -93,6 +102,7 @@ export default function SegmentsPanel() {
       ? checkedShown
       : shownPending.map((event) => event.id);
   const scansRunning = Object.values(scans).some((scan) => scan.running);
+  const hasDdd = useMemo(() => events.some(eventUsesDdd), [events]);
 
   return (
     <aside className="flex w-96 shrink-0 flex-col border-l border-seam bg-bay/40">
@@ -130,6 +140,11 @@ export default function SegmentsPanel() {
             <ScanChip label="Text" scan={scans.text} />
             <ScanChip label="Sound" scan={scans.audio} />
             <ScanChip label="Guide" scan={scans.guide} />
+          </div>
+        )}
+        {hasDdd && (
+          <div className="mt-1.5">
+            <DddAttribution compact />
           </div>
         )}
 
@@ -403,49 +418,59 @@ function GuideTools() {
           </span>
         </div>
       </div>
-      <div className="flex gap-1.5">
+      <div className="mb-2 border-b border-seam pb-2">
+        <p className="text-[10px] text-faint">Community timestamps</p>
+        <div className="mt-1">
+          <DddAttribution compact />
+        </div>
+        <div className="mt-1.5 flex gap-1.5">
+          <input
+            value={guideTitle}
+            onChange={(event) =>
+              setGuideIdentity(event.target.value, guideYear)
+            }
+            placeholder="Movie title"
+            className="min-w-0 flex-1 rounded border border-seam bg-well px-2 py-1 text-[11px] text-glow"
+          />
+          <input
+            value={guideYear ?? ""}
+            onChange={(event) =>
+              setGuideIdentity(
+                guideTitle,
+                event.target.value ? Number(event.target.value) : null,
+              )
+            }
+            placeholder="Year"
+            className="w-16 rounded border border-seam bg-well px-2 py-1 text-[11px] text-glow"
+          />
+        </div>
         <input
-          value={guideTitle}
-          onChange={(event) =>
-            setGuideIdentity(event.target.value, guideYear)
-          }
-          placeholder="Movie title"
-          className="min-w-0 flex-1 rounded border border-seam bg-well px-2 py-1 text-[11px] text-glow"
+          type="password"
+          value={settings.dddApiKey}
+          onChange={(event) => updateSettings({ dddApiKey: event.target.value })}
+          placeholder="DoesTheDogDie.com API key"
+          className="mt-1.5 w-full rounded border border-seam bg-well px-2 py-1 text-[11px] text-glow"
         />
-        <input
-          value={guideYear ?? ""}
-          onChange={(event) =>
-            setGuideIdentity(
-              guideTitle,
-              event.target.value ? Number(event.target.value) : null,
-            )
-          }
-          placeholder="Year"
-          className="w-16 rounded border border-seam bg-well px-2 py-1 text-[11px] text-glow"
-        />
-      </div>
-      <input
-        type="password"
-        value={settings.dddApiKey}
-        onChange={(event) => updateSettings({ dddApiKey: event.target.value })}
-        placeholder="Does the Dog Die? API key"
-        className="mt-1.5 w-full rounded border border-seam bg-well px-2 py-1 text-[11px] text-glow"
-      />
-      <div className="mt-1.5 flex gap-1.5">
+        <p className="mt-1 text-[10px] leading-snug text-faint">
+          <DddLink href={DDD_API}>Get a free key</DddLink>
+          {" · "}
+          <DddLink href={DDD_TERMS}>API terms</DddLink>
+          . Your key stays on this Mac and is never bundled with Videofy.
+        </p>
         <button
           disabled={!settings.dddApiKey || guideScan.running}
           onClick={() => void lookupGuide()}
-          className="flex-1 rounded bg-seam px-2 py-1 text-[11px] text-dust hover:text-glow disabled:opacity-40"
+          className="mt-1.5 w-full rounded bg-seam px-2 py-1 text-[11px] text-dust hover:text-glow disabled:opacity-40"
         >
-          Look up guide
-        </button>
-        <button
-          onClick={() => void importTimingFile()}
-          className="flex-1 rounded bg-seam px-2 py-1 text-[11px] text-dust hover:text-glow"
-        >
-          Import warning timings
+          Look up DoesTheDogDie.com
         </button>
       </div>
+      <button
+        onClick={() => void importTimingFile()}
+        className="w-full rounded bg-seam px-2 py-1 text-[11px] text-dust hover:text-glow"
+      >
+        Import warning timings
+      </button>
       <label className="mt-1.5 flex items-center gap-2 text-[10px] text-faint">
         Imported timing offset
         <input
@@ -558,6 +583,11 @@ function EventRow({
       <p className="mt-1.5 text-[11px] leading-snug text-dust">
         {event.reason}
       </p>
+      {eventUsesDdd(event) && (
+        <div className="mt-1">
+          <DddAttribution compact />
+        </div>
+      )}
       <div className="mt-1.5 flex items-center justify-between">
         <button
           onClick={(click) => {
@@ -597,7 +627,13 @@ function EventRow({
         <div className="mt-2 space-y-1 border-t border-seam/70 pt-2">
           {event.evidence.map((evidence, index) => (
             <div key={`${evidence.source}-${index}`}>
-              <p className="text-[10px] text-dust">{evidence.source}</p>
+              {isDddSource(evidence.source) ? (
+                <p className="text-[10px] text-dust">
+                  <DddLink href={DDD_HOME}>{evidence.source}</DddLink>
+                </p>
+              ) : (
+                <p className="text-[10px] text-dust">{evidence.source}</p>
+              )}
               <p className="select-text text-[10px] leading-snug text-faint">
                 {evidence.label}
               </p>

@@ -94,10 +94,10 @@ pub async fn lookup_content_guide(
 
 fn lookup_ddd(api_key: &str, title: &str, year: Option<i32>) -> Result<GuideResult, String> {
     if api_key.trim().is_empty() {
-        return Err("A Does the Dog Die? API key is required.".into());
+        return Err("A DoesTheDogDie.com API key is required.".into());
     }
     let client = reqwest::blocking::Client::builder()
-        .user_agent("Videofy/0.2")
+        .user_agent("Videofy/0.1.1")
         .build()
         .map_err(|e| e.to_string())?;
     let mut search_url = format!(
@@ -164,7 +164,7 @@ fn lookup_ddd(api_key: &str, title: &str, year: Option<i32>) -> Result<GuideResu
             .map_err(|e| format!("Guide ratings failed: {e}"))?;
         if response.status().as_u16() == 403 {
             warnings.push(
-                "Your guide tier provides title warnings but not timestamped ratings.".into(),
+                "This API key cannot read timestamped ratings. The free tier includes community timestamps — check the key on DoesTheDogDie.com/api.".into(),
             );
         } else {
             let ratings: Vec<DddRating> = response
@@ -210,7 +210,7 @@ fn lookup_ddd(api_key: &str, title: &str, year: Option<i32>) -> Result<GuideResu
                     reason: description.clone(),
                     suggested_action: EventAction::Cut,
                     evidence: vec![Evidence {
-                        source: "Does the Dog Die?".into(),
+                        source: "DoesTheDogDie.com".into(),
                         label: stat.topic_name.clone(),
                         detail: rating.cue_description.clone(),
                         confidence,
@@ -226,7 +226,7 @@ fn lookup_ddd(api_key: &str, title: &str, year: Option<i32>) -> Result<GuideResu
         );
     }
     Ok(GuideResult {
-        provider: "Does the Dog Die?".into(),
+        provider: "DoesTheDogDie.com".into(),
         title: Some(found.name),
         events: merge_events(events),
         warnings,
