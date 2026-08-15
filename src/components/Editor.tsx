@@ -30,7 +30,19 @@ export default function Editor() {
     return edits.cuts.length + edits.mutes.length;
   });
 
-  if (!info) return null;
+  if (!info) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3">
+        <p className="text-sm text-dust">This movie did not finish opening.</p>
+        <button
+          onClick={reset}
+          className="rounded px-3 py-1.5 text-sm text-glow hover:bg-seam"
+        >
+          ← New movie
+        </button>
+      </div>
+    );
+  }
 
   const exportBlocked =
     !keyframesReady || analyzing || rebuildingPreview;

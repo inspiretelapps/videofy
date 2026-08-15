@@ -4,6 +4,7 @@ pub mod content;
 pub mod export;
 pub mod guides;
 pub mod media;
+pub mod preview_http;
 pub mod probe;
 pub mod proxy;
 pub mod text_analysis;

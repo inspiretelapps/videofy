@@ -112,7 +112,7 @@ pub async fn generate_proxy(
         let dir = media::cache_dir_for(&app, &path)?;
         let _guard = media::JobGuard::acquire(format!("proxy:{}", dir.display()))?;
         if let Some(cached) = cached_playable_preview(&dir, force_transcode) {
-            return Ok(cached.to_string_lossy().to_string());
+            return crate::preview_http::url_for(&app, &cached);
         }
         let preview = dir.join(format!("{PREVIEW_VERSION}.mp4"));
         if force_transcode {
@@ -145,7 +145,7 @@ pub async fn generate_proxy(
                         "proxy-progress",
                         serde_json::json!({ "t": duration, "pct": 100.0, "mode": "direct" }),
                     );
-                    return Ok(preview.to_string_lossy().to_string());
+                    return crate::preview_http::url_for(&app, &preview);
                 }
                 // External volumes cannot be hard-linked into the local cache.
                 // A clean stream-copy remux is still much faster than encoding.
@@ -160,7 +160,7 @@ pub async fn generate_proxy(
             "proxy-progress",
             serde_json::json!({ "t": duration, "pct": 100.0 }),
         );
-        Ok(preview.to_string_lossy().to_string())
+        crate::preview_http::url_for(&app, &preview)
     })
     .await
     .map_err(|e| e.to_string())?

@@ -27,9 +27,10 @@ export type SortBy = "time" | "severity" | "confidence";
 export type MinSeverity = 1 | 2 | 3;
 
 function previewSrc(path: string): string {
-  // Do not append a query string. WKWebView's asset protocol treats `?t=` as
-  // part of the file path and fails with NotSupportedError — the same error
-  // we were trying to cache-bust.
+  // generate_proxy now returns loopback HTTP. Keep convertFileSrc as a
+  // fallback for older backends, but never append a query string: WKWebView
+  // treats `?t=` as part of the asset path and throws NotSupportedError.
+  if (/^https?:\/\//i.test(path)) return path;
   return convertFileSrc(path);
 }
 
@@ -293,7 +294,7 @@ export const useStore = create<State>()((set, get) => ({
       for (const event of events) statuses[event.id] ??= "pending";
       set({
         stage: "editor",
-        proxyUrl: previewSrc(proxyPath),
+        proxyUrl: null,
         rebuildingPreview: false,
         keyframes: [],
         keyframesReady: false,
@@ -309,6 +310,12 @@ export const useStore = create<State>()((set, get) => ({
         shuttle: 0,
         view: { t0: 0, t1: info.duration },
       });
+      const previewUrl = previewSrc(proxyPath);
+      window.setTimeout(() => {
+        if (get().info?.path === info.path) {
+          set({ proxyUrl: previewUrl });
+        }
+      }, 80);
 
       // The preview is the only thing required to start editing. Everything
       // else fills in behind it. Running these decoders alongside preview
